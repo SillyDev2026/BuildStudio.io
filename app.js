@@ -317,13 +317,20 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
       '<a class="btn" href="https://github.com/SillyDev2026/Collab.io" rel="noopener noreferrer" target="_blank">' + icon("external") + ' Open GitHub repository</a></div>';
   }
   function settingsPage() {
-    return pageHead("Settings", "Customize the interface and manage browser-only preview data.") +
-      '<div class="card panel"><h2>Appearance</h2><div class="settings-row"><div><strong>Theme</strong><p>Choose how Collab.io looks on this device.</p></div>' +
+    return pageHead("Settings", "Theme, account connection, and local data controls.") +
+      '<div class="card panel"><h2>GitHub account</h2><div class="settings-row"><div><strong>Connection</strong><p>' +
+      (signedIn() ? 'Signed in as @' + esc(authUser.login) : apiBase() ? 'Cloud API configured. Sign in to use projects and teams.' : 'Backend not configured. GitHub Pages cannot sign in on its own.') +
+      '</p></div>' + badge(signedIn() ? 'Connected' : apiBase() ? 'Ready to sign in' : 'Needs backend', signedIn() ? 'green' : 'warning') + '</div>' +
+      '<div class="settings-row"><div><strong>Server address</strong><p>' + esc(apiBase() || 'Not set — configure config.js after deploying the Worker') +
+      '</p></div><a class="btn small" target="_blank" rel="noopener noreferrer" href="https://github.com/SillyDev2026/Collab.io/blob/main/backend/README.md">Setup guide</a></div>' +
+      '<div class="settings-row"><div><strong>Login</strong><p>GitHub identity is verified by the backend. The browser never receives OAuth client secrets.</p></div>' +
+      (signedIn() ? '<button class="btn small" data-signout="1">Sign out</button>' : '<button class="btn primary small" data-signin="1">Sign in</button>') + '</div></div>' +
+      '<div class="card panel mt-24"><h2>Appearance and browser data</h2><div class="settings-row"><div><strong>Theme</strong><p>Choose the appearance on this device.</p></div>' +
       '<select id="theme-select" aria-label="Appearance theme"><option value="dark">Dark</option><option value="light">Light</option></select></div>' +
-      '<div class="settings-row"><div><strong>Environment</strong><p>No account or backend is connected to this demo.</p></div>' + badge("Local preview", "warning") +
-      '</div><div class="settings-row"><div><strong>Clear local preview data</strong><p>Restore sample projects and remove edits saved in this browser.</p></div>' +
+      '<div class="settings-row"><div><strong>Restore sample projects</strong><p>Deletes local drafts only. Cloud projects are not affected.</p></div>' +
       '<button class="btn danger small" data-reset="1">' + icon("trash", "tiny") + ' Reset</button></div></div>' +
-      '<div class="card doc-box mt-24"><h3>Privacy in this version</h3><p class="mb-0">No sign-in, live collaboration, server upload, or Discord messages are implemented. Workspace data only lives in localStorage on this browser. The site may load Google Fonts from Google’s servers.</p></div>';
+      '<div class="card doc-box mt-24"><h3>Data handling</h3><p>Drafts use browser localStorage. Account sessions use sessionStorage. Explicit cloud sync uploads scripts to your Cloudflare D1 database.</p>' +
+      '<p class="mb-0">Do not store passwords or tokens in scripts. The server enforces project permissions.</p></div>';
   }
   function renderModal() {
     if (!modal) return "";
