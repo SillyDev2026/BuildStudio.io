@@ -1,4 +1,4 @@
-name: BuildStudio Checks
+name: BuildStudio v1 Checks
 on:
   push:
     branches: [main]
@@ -7,11 +7,14 @@ permissions:
   contents: read
 jobs:
   test:
+    name: Static + Regression Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm run check
-      - run: npm test
+      - name: Validate JavaScript modules
+        run: npm run check
+      - name: Regression suite
+        run: npm test

@@ -1,94 +1,274 @@
-import { createProject, addNode, duplicateNode, deleteNode, validateProject, makeLuau, templates, adjustNode, alignNode, reorderNode } from "./model.mjs";
-const $ = id => document.getElementById(id);
-const TYPES = ["Frame","TextLabel","TextButton","TextBox","ImageLabel","ImageButton","ScrollingFrame"];
-const KEY = "buildstudio.v1.projects";
-const apiBase = String(window.BUILDSTUDIO_CONFIG?.apiUrl || "").replace(/\/$/, "");
-let projects = [], currentId = "", selected = null, history = [], future = [], preview = false, ratio = "16/9", token = sessionStorage.getItem("buildstudio.token") || "", user = null;
-let drag = null, saveTimer = null, snapEnabled = false;
-const escapeText = x => String(x).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const active = () => projects.find(p=>p.id===currentId);
-const toast = message => { $("toast").textContent=message; $("toast").classList.add("visible"); clearTimeout(toast.t);toast.t=setTimeout(()=>$("toast").classList.remove("visible"),2600); $("status").textContent=message; };
-function persist() { try {localStorage.setItem(KEY,JSON.stringify({projects,currentId})); $("save").textContent="Saved locally";}catch(e){toast("Storage full: export your project as JSON");} }
-function schedule(){ $("save").textContent="Saving…"; clearTimeout(saveTimer);saveTimer=setTimeout(persist,220); }
-function snapshot(){ const p=active();if(!p)return; history.push(JSON.stringify(p.data));if(history.length>80)history.shift();future=[];}
-function mutate(fn){ const p=active();if(!p)return;snapshot();fn(p.data);schedule();render();}
-function undo(){const p=active();if(!p||!history.length)return;future.push(JSON.stringify(p.data));p.data=JSON.parse(history.pop());schedule();render();}
-function redo(){const p=active();if(!p||!future.length)return;history.push(JSON.stringify(p.data));p.data=JSON.parse(future.pop());schedule();render();}
-function setProject(p){currentId=p.id;selected=null;history=[];future=[];schedule();render();}
-function init(){try{const saved=JSON.parse(localStorage.getItem(KEY)||"{}");if(Array.isArray(saved.projects))projects=saved.projects.filter(p=>p&&p.id&&validateProject(p.data));currentId=saved.currentId;}catch{}
-if(!projects.length){const p=createProject("Starter HUD",templates.hud());projects=[p];currentId=p.id;}
-if(!active())currentId=projects[0].id;
-$("components").innerHTML=TYPES.map((type,i)=>'<button class="component" data-type="'+type+'"><span class="glyph">'+["▣","T","▰","▤","▧","◈","☷"][i]+'</span><span><strong>'+type+'</strong><small>'+["Container","Text","Clickable label","User input","Image","Clickable image","Scrollable container"][i]+'</small></span><span class="plus">+</span></button>').join("");
-$("components").addEventListener("click",e=>{const b=e.target.closest("[data-type]");if(!b)return;mutate(data=>{const node=addNode(data,b.dataset.type,selected);selected=node.id;});});
-$("templates").innerHTML=Object.keys(templates).map(k=>'<button class="template" data-template="'+k+'"><span>✦</span><span><strong>'+({"hud":"Starter HUD","shop":"Item Shop","blank":"Blank Canvas"}[k]||k)+'</strong><small>Start a new design</small></span></button>').join("");
-$("templates").onclick=e=>{const b=e.target.closest("[data-template]");if(!b)return;if(active().data.nodes.length&&!confirm("Replace current design with this template?"))return;mutate(data=>{data.nodes=templates[b.dataset.template]().nodes;selected=null;});closeMobile();};
-$("layers-tab").onclick=()=>showTab("layers");$("components-tab").onclick=()=>showTab("components");
-$("undo").onclick=undo;$("redo").onclick=redo;
-$("snap").onclick=()=>{snapEnabled=!snapEnabled;$("snap").classList.toggle("active",snapEnabled);$("snap").setAttribute("aria-pressed",String(snapEnabled));$("snap").textContent=snapEnabled?"Snap: 2.5%":"Snap: Off";$("board").classList.toggle("snap-grid",snapEnabled);toast(snapEnabled?"Grid snapping enabled":"Free positioning enabled");};
-$("projects").onclick=projectDialog;$("preview").onclick=()=>{preview=!preview;$("preview").classList.toggle("active",preview);render();toast(preview?"Preview enabled":"Editing enabled");};
-$("code").onclick=codeDialog;$("export").onclick=()=>download(makeLuau(active().data),active().name.replace(/[^a-z0-9-_]+/gi,"-")+".luau","text/plain");
-$("account").onclick=accountDialog;$("close-modal").onclick=()=>$("modal").close();
-$("file-import").onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const json=JSON.parse(await f.text());const data=json.data||json;if(!validateProject(data))throw Error("Invalid project");const p=createProject(String(json.name||data.name||"Imported").slice(0,70),data);projects.push(p);setProject(p);toast("Project imported");}catch(err){toast(err.message)}e.target.value="";};
-document.querySelectorAll("[data-device]").forEach(b=>b.onclick=()=>{ratio=b.dataset.device;document.querySelectorAll("[data-device]").forEach(x=>x.classList.toggle("active",x===b));$("board").style.aspectRatio=ratio;render();});
+// BuildStudio.io v1 — modular app controller, no UI framework or build step.
+import {COMPONENTS,DEVICES,FONT_NAMES,templates,makeLuau,auditProject,normalizeProject,validateProject,addNode,adjustNode,normalizeNode} from "./model.mjs";
+import {ProjectStore} from "./store.mjs";
+import {CanvasView} from "./canvas.mjs";
+import {CloudClient} from "./cloud.mjs";
+const $=id=>document.getElementById(id);
+const escape=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cleanFile=x=>(String(x||"BuildStudio").replace(/[^a-z0-9_-]+/gi,"-").slice(0,70)||"BuildStudio");
+const mobile=()=>window.matchMedia("(max-width:760px)").matches;
+const store=new ProjectStore();
+const cloud=new CloudClient(window.BUILDSTUDIO_CONFIG?.apiUrl);
+let preview=false,snap=false,showGrid=true,device="desktop",zoom=100,layerSearch="",componentSearch="",activeTab="components",copied=null;
+let notifyTimer=null;
+const canvas=new CanvasView($("board"),store,{getSnap:()=>snap,getPreview:()=>preview,onSelection:(id,isMove=false,message)=>{if(message)toast(message);renderInspector(isMove);if(!isMove)renderLayers();}});
+function toast(message){$("status").textContent=String(message);const el=$("toast");el.textContent=String(message);el.classList.add("visible");clearTimeout(notifyTimer);notifyTimer=setTimeout(()=>el.classList.remove("visible"),2600);}
+function download(content,name,type="text/plain"){
+  const objectURL=URL.createObjectURL(new Blob([content],{type}));const anchor=document.createElement("a");
+  anchor.href=objectURL;anchor.download=name;document.body.append(anchor);anchor.click();anchor.remove();
+  setTimeout(()=>URL.revokeObjectURL(objectURL),1500);
+}
+function showModal(title,markup){
+  $("modal-title").textContent=title;$("modal-body").innerHTML=markup;
+  if(!$("modal").open)$("modal").showModal();
+}
+function closeModal(){if($("modal").open)$("modal").close();}
+$("close-modal").onclick=closeModal;
+function execute(fn){try{return fn();}catch(error){toast(error.message||"Unexpected editor error");return null;}}
+async function executeAsync(fn){try{return await fn();}catch(error){toast(error.message||"Network request failed");return null;}}
+function closeMobile(){document.querySelectorAll(".sidebar").forEach(el=>el.classList.remove("mobile-open"));}
+function openMobile(which){closeMobile();$(which).classList.add("mobile-open");}
+function showTab(which){
+  activeTab=which;
+  $("components-panel").hidden=which!=="components";
+  $("layers-panel").hidden=which!=="layers";
+  $("components-tab").classList.toggle("active",which==="components");
+  $("layers-tab").classList.toggle("active",which==="layers");
+}
+function updateToolbar(){
+  const project=store.active();
+  $("projects").firstChild.textContent=project.name+" ";
+  $("board-name").textContent=project.name;
+  $("object-count").textContent=store.data.nodes.length+" components";
+  $("selection-label").textContent=store.selected?(store.data.nodes.find(n=>n.id===store.selected)?.name||"No selection"):"No selection";
+  $("undo").disabled=!store.history.length;$("redo").disabled=!store.future.length;
+  $("save").textContent=store.timer?"Saving…":"Saved locally";
+}
+function renderComponents(){
+  const query=componentSearch.trim().toLowerCase();
+  const descriptions={Frame:"UI container",CanvasGroup:"Grouped canvas",ScrollingFrame:"Scrollable container",TextLabel:"Read-only text",TextButton:"Interactive button",TextBox:"Text input field",ImageLabel:"Image display",ImageButton:"Image button"};
+  const html=Object.entries(COMPONENTS).filter(([name,meta])=>(name+" "+meta.label).toLowerCase().includes(query)).map(([name,meta])=>'<button class="component" data-add="'+escape(name)+'"><span class="symbol">'+escape(meta.icon)+'</span><span><strong>'+escape(meta.label)+'</strong><small>'+escape(descriptions[name])+'</small></span><span class="plus">+</span></button>').join("");
+  $("components").innerHTML=html||'<p class="empty">No matching components.</p>';
+  $("templates").innerHTML=Object.keys(templates).map(key=>'<button class="template" data-template="'+escape(key)+'"><span class="symbol">✦</span><span><strong>'+escape(({hud:"Starter HUD",shop:"Item Shop",blank:"Blank Canvas",inventory:"Inventory",leaderboard:"Leaderboard",settings:"Settings Menu",loading:"Loading Screen",notification:"Notification",profile:"Player Profile"})[key]||key)+'</strong><small>Load design preset</small></span></button>').join("");
+}
+function renderLayers(){
+  const nodes=store.data.nodes;const query=layerSearch.trim().toLowerCase();
+  $("layer-count").textContent=nodes.length+" objects";
+  function depth(n){let d=0;const seen=new Set();while(n.parent&&d<32){n=nodes.find(x=>x.id===n.parent);if(!n||seen.has(n.id))break;seen.add(n.id);d++;}return d;}
+  $("layers").innerHTML=nodes.filter(n=>!query||(n.name+" "+n.type).toLowerCase().includes(query)).map(n=>{
+    const selected=n.id===store.selected,offset=Math.min(depth(n),8)*13;
+    return '<button class="layer'+(selected?' active':'')+'" data-layer="'+escape(n.id)+'" title="'+escape(n.name)+'" style="padding-left:'+(8+offset)+'px"><span class="layer-glyph">'+escape(COMPONENTS[n.type]?.icon||"▣")+'</span><span class="layer-name">'+escape(n.name)+'</span><small class="layer-type">'+escape(n.type)+'</small></button>';
+  }).join("")||'<p class="empty">No matching objects.</p>';
+}
+function prop(key,label,value,type="text",options={}){
+  let control;
+  const val=value===null||value===undefined?"":String(value);
+  if(type==="select")control='<select id="prop-'+key+'" data-prop="'+key+'">'+(options.items||[]).map(item=>'<option value="'+escape(item)+'"'+(item===val?' selected':'')+'>'+escape(item)+'</option>').join("")+'</select>';
+  else if(type==="checkbox")control='<label class="checkbox-row"><input id="prop-'+key+'" data-prop="'+key+'" type="checkbox"'+(value?' checked':'')+'> '+escape(label)+'</label>';
+  else control='<input id="prop-'+key+'" data-prop="'+key+'" type="'+type+'" value="'+escape(val)+'"'+(type==="number"?' step="'+escape(options.step||"any")+'"':'')+'>';
+  return '<div class="prop">'+(type==="checkbox"?"":'<label for="prop-'+key+'">'+escape(label)+'</label>')+control+'</div>';
+}
+const pct=value=>Math.round(value*10000)/100;
+const numerical=new Set(["x","y","w","h","anchorX","anchorY","rotation","zIndex","opacity","radius","border","fontSize","stroke","aspect","padding"]);
+const colorFields=new Set(["color","textColor","borderColor","strokeColor"]);
+function renderInspector(onlyGeometry=false){
+  const node=store.data.nodes.find(n=>n.id===store.selected),host=$("inspector");
+  $("inspector-title").textContent=node?node.name:"Properties";
+  if(!node){host.innerHTML='<p class="aside-tip">Choose a component from the canvas or hierarchy to edit appearance, scale-based position, and behavior.</p><p class="aside-tip">Tip: design at any screen ratio; scale units keep your UI responsive in Roblox.</p>';return;}
+  if(onlyGeometry){
+    for(const field of ["x","y","w","h"]){const input=$("prop-"+field);if(input&&document.activeElement!==input)input.value=pct(node[field]);}
+    return;
+  }
+  const n=normalizeNode(node),parentChoices=["ScreenGui",...store.data.nodes.filter(x=>x.id!==n.id&&COMPONENTS[x.type]?.container).map(x=>x.id)];
+  const parentLabels=Object.fromEntries(store.data.nodes.map(x=>[x.id,x.name]));
+  let html='<p class="section-label">OBJECT</p>'+prop("name","Name",n.name);
+  html+='<div class="prop"><label for="node-parent">Parent</label><select id="node-parent"><option value="">ScreenGui</option>'+parentChoices.slice(1).map(id=>'<option value="'+escape(id)+'"'+(id===n.parent?' selected':'')+'>'+escape(parentLabels[id])+'</option>').join("")+'</select></div>';
+  html+='<p class="inspector-section">POSITION & SIZE · SCALE %</p><div class="prop-grid">'+
+    prop("x","X",pct(n.x),"number")+prop("y","Y",pct(n.y),"number")+prop("w","Width",pct(n.w),"number")+prop("h","Height",pct(n.h),"number")+
+    prop("anchorX","Anchor X",pct(n.anchorX),"number")+prop("anchorY","Anchor Y",pct(n.anchorY),"number")+
+    prop("rotation","Rotation °",n.rotation,"number")+prop("zIndex","ZIndex",n.zIndex,"number")+'</div>';
+  html+='<div class="action-grid"><button data-align="center-x">Center X</button><button data-align="center-y">Center Y</button><button data-align="fill-width">Fill width</button><button data-align="fill-height">Fill height</button></div>';
+  html+='<p class="inspector-section">APPEARANCE</p><div class="prop-grid">'+prop("color","Background",n.color,"color")+prop("opacity","Transparency %",n.opacity,"number")+
+    prop("radius","Corner px",n.radius,"number")+prop("border","Border px",n.border,"number")+
+    prop("borderColor","Border color",n.borderColor,"color")+prop("strokeColor","Stroke color",n.strokeColor,"color")+
+    prop("stroke","Stroke px",n.stroke,"number")+prop("aspect","Aspect ratio (0 = off)",n.aspect,"number")+'</div>'+prop("visible","Visible",n.visible,"checkbox");
+  if(n.type.startsWith("Text")){
+    html+='<p class="inspector-section">TEXT</p>'+prop("text","Content",n.text)+
+      '<div class="prop-grid">'+prop("textColor","Text color",n.textColor,"color")+prop("fontSize","Text size",n.fontSize,"number")+
+      prop("font","Font",n.font,"select",{items:FONT_NAMES})+prop("textAlign","Alignment",n.textAlign,"select",{items:["Left","Center","Right"]})+'</div>'+
+      prop("textScaled","Auto-scale text",n.textScaled,"checkbox");
+    if(n.type==="TextBox")html+=prop("placeholder","Placeholder",n.placeholder);
+  }
+  if(n.type.startsWith("Image"))html+='<p class="inspector-section">IMAGE</p>'+prop("image","Roblox image asset ID",n.image);
+  if(COMPONENTS[n.type]?.container)html+='<p class="inspector-section">CONTAINER</p>'+prop("layout","Auto layout",n.layout,"select",{items:["none","vertical","horizontal","grid"]})+
+    prop("padding","Padding (scale, 0–0.4)",n.padding,"number")+prop("clip","Clip children",n.clip,"checkbox");
+  html+='<p class="inspector-section">ACTIONS</p><div class="action-grid"><button id="duplicate">Duplicate</button><button id="remove-node" class="danger">Delete</button><button id="raise">Raise layer</button><button id="lower">Lower layer</button></div>';
+  host.innerHTML=html;
+  $("node-parent").onchange=event=>{if(!store.reparent(event.target.value||null)){toast("Cannot nest inside itself or a child");renderInspector();}};
+  host.querySelectorAll("[data-align]").forEach(button=>button.onclick=()=>execute(()=>store.align(button.dataset.align)));
+  host.querySelectorAll("[data-prop]").forEach(input=>input.addEventListener("change",()=>{
+    execute(()=>{
+      const key=input.dataset.prop;let value=input.type==="checkbox"?input.checked:input.value;
+      if(numerical.has(key)){
+        value=Number(value);if(!Number.isFinite(value))throw Error("Enter a valid number");
+        if(["x","y","w","h","anchorX","anchorY"].includes(key))value/=100;
+        if(key==="padding")value=Math.min(.4,Math.max(0,value));
+        if(["w","h"].includes(key))value=Math.min(1.5,Math.max(.015,value));
+        if(["anchorX","anchorY"].includes(key))value=Math.min(1,Math.max(0,value));
+        if(key==="opacity")value=Math.min(100,Math.max(0,value));
+        if(key==="zIndex")value=Math.round(Math.min(100,Math.max(1,value)));
+        if(key==="radius")value=Math.min(100,Math.max(0,value));
+        if(key==="fontSize")value=Math.min(96,Math.max(6,value));
+        if(key==="border"||key==="stroke")value=Math.min(24,Math.max(0,value));
+        if(key==="aspect")value=Math.min(10,Math.max(0,value));
+        if(key==="rotation")value=Math.min(360,Math.max(-360,value));
+      }
+      if(key==="name")value=String(value).trim().slice(0,120)||n.type;
+      if(key==="text")value=String(value).slice(0,5000);
+      if(key==="image")value=String(value).slice(0,500);
+      if(colorFields.has(key) && !/^#[0-9a-f]{6}$/i.test(value))throw Error("Invalid color");
+      if(["x","y","w","h"].includes(key))store.geometry(n.id,{[key]:value});
+      else store.patch(n.id,{[key]:value});
+    });
+  }));
+  $("duplicate").onclick=()=>execute(()=>store.duplicate());
+  $("remove-node").onclick=()=>execute(()=>store.removeNode());
+  $("raise").onclick=()=>execute(()=>store.reorder("up"));
+  $("lower").onclick=()=>execute(()=>store.reorder("down"));
+}
+function render(){
+  updateToolbar();renderLayers();renderInspector();
+}
+store.onChange(reason=>{
+  if(reason==="storage-error"){toast("Browser storage full. Export JSON to back up your project.");return;}
+  if(reason==="saved"){$("save").textContent="Saved locally";return;}
+  render();
+});
+function setDevice(key){
+  device=key;const choice=DEVICES[key];$("board").style.aspectRatio=choice.ratio;
+  $("device-label").textContent=choice.label+" · "+choice.ratio.replace("/" , ":");
+  document.querySelectorAll("[data-device]").forEach(button=>button.classList.toggle("active",button.dataset.device===key));
+}
+function setZoom(amount){
+  zoom=Math.max(50,Math.min(175,amount));$("zoom-label").textContent=zoom+"%";
+  const w=$("board-wrap");w.style.width=(zoom*8.5)+"px";w.style.maxWidth="none";
+}
+function codeDialog(mode="runtime"){
+  const code=makeLuau(store.data,{mode});
+  showModal(mode==="studio"?"Studio Command Bar code":"Generated Luau",
+    '<p class="hint">'+(mode==="studio"?"Run this in the Roblox Studio Command Bar to create the UI under StarterGui.":"Put this in a LocalScript inside StarterPlayer → StarterPlayerScripts.")+'</p>'+
+    '<div class="button-row"><button id="runtime-mode"'+(mode==="runtime"?' class="active"':'')+'>Runtime</button><button id="studio-mode"'+(mode==="studio"?' class="active"':'')+'>Studio</button><button id="download-lua" class="primary">Download .luau</button><button id="copy-lua">Copy code</button></div><pre id="code-view"></pre>');
+  $("code-view").textContent=code;
+  $("runtime-mode").onclick=()=>codeDialog("runtime");$("studio-mode").onclick=()=>codeDialog("studio");
+  $("download-lua").onclick=()=>download(code,cleanFile(store.active().name)+(mode==="studio"?"-studio":"")+".luau");
+  $("copy-lua").onclick=async()=>{try{await navigator.clipboard.writeText(code);toast("Luau copied");}catch{toast("Clipboard access denied: use Download");}};
+}
+function exportDialog(){
+  showModal("Export design",'<p class="hint">Choose how to use your Roblox interface.</p><div class="action-grid"><button id="exp-luau" class="primary">↧ LocalScript (.luau)</button><button id="exp-studio">↧ Studio code (.luau)</button><button id="exp-json">↧ Project (.json)</button><button id="exp-copy">Copy Luau</button></div><p class="hint">Runtime code builds the UI in PlayerGui. Studio code builds it in StarterGui for editing. JSON can be imported back into BuildStudio or by the companion Studio plugin.</p>');
+  $("exp-luau").onclick=()=>download(makeLuau(store.data),cleanFile(store.active().name)+".luau");
+  $("exp-studio").onclick=()=>download(makeLuau(store.data,{mode:"studio"}),cleanFile(store.active().name)+"-studio.luau");
+  $("exp-json").onclick=()=>download(store.exportJSON(),cleanFile(store.active().name)+".json","application/json");
+  $("exp-copy").onclick=async()=>{try{await navigator.clipboard.writeText(makeLuau(store.data));toast("Luau copied");}catch{toast("Clipboard access unavailable");}};
+}
+function projectDialog(){
+  showModal("Your projects",'<p class="hint">Projects autosave locally on this browser. Export JSON for backups or use GitHub cloud once configured.</p><div id="project-list"></div><div class="button-row"><button id="new-project" class="primary">+ New project</button><button id="rename-project">Rename current</button><button id="export-project">Export JSON</button><button id="import-project">Import JSON</button></div>');
+  const draw=()=>{
+    $("project-list").innerHTML=store.projects.map(p=>'<div class="modal-row"><button data-open="'+escape(p.id)+'">'+escape(p.name)+(p.id===store.currentId?" ●":"")+'</button><small>'+p.data.nodes.length+' objects</small><button data-remove="'+escape(p.id)+'" class="danger" title="Delete local project">✕</button></div>').join("");
+    $("project-list").querySelectorAll("[data-open]").forEach(button=>button.onclick=()=>{store.choose(button.dataset.open);closeModal();});
+    $("project-list").querySelectorAll("[data-remove]").forEach(button=>button.onclick=()=>{if(confirm("Delete this project from this browser?"))execute(()=>{store.removeProject(button.dataset.remove);draw();});});
+  };draw();
+  $("new-project").onclick=()=>{const name=prompt("Project name","Untitled UI");if(name)execute(()=>{store.create(name);closeModal();});};
+  $("rename-project").onclick=()=>{const name=prompt("Rename project",store.active().name);if(name)execute(()=>{store.rename(name);closeModal();});};
+  $("export-project").onclick=()=>download(store.exportJSON(),cleanFile(store.active().name)+".json","application/json");
+  $("import-project").onclick=()=>$("file-import").click();
+}
+function auditDialog(){
+  const issues=auditProject(store.data),warnings=issues.filter(i=>i.level==="warning").length;
+  const body=issues.length?issues.map(i=>'<div class="audit-item '+escape(i.level)+'"><strong>'+escape(i.level.toUpperCase())+'</strong> · '+escape(i.message)+'</div>').join(""):'<p>All checks passed. No issues found with the current design.</p>';
+  showModal("Design inspector",'<p class="hint">'+store.data.nodes.length+' components · '+warnings+' warnings</p>'+body+'<p class="hint">These are design hints; interactive Roblox behavior still requires Luau scripts.</p>');
+}
+function shortcutsDialog(){
+  showModal("Keyboard shortcuts",'<p class="hint">Select an object before using manipulation shortcuts.</p><p><span class="kbd">Ctrl+Z</span> Undo · <span class="kbd">Ctrl+Y</span> Redo · <span class="kbd">Ctrl+S</span> Save</p><p><span class="kbd">Ctrl+D</span> Duplicate · <span class="kbd">Ctrl+C</span> Copy object · <span class="kbd">Ctrl+V</span> Paste object</p><p><span class="kbd">Delete</span> Remove · <span class="kbd">Arrow keys</span> Move 1% · <span class="kbd">Shift + Arrow</span> Move 5%</p><p><span class="kbd">Esc</span> Deselect · <span class="kbd">Ctrl+E</span> Export</p>');
+}
+function accountDialog(){
+  if(!cloud.configured){showModal("BuildStudio Cloud",'<p>The editor works without signing in. To enable cloud projects, deploy the Cloudflare Worker and set the public Worker URL in <code>docs/config.js</code>.</p><p class="hint">Never place API tokens or GitHub client secrets in your GitHub Pages code.</p>');return;}
+  if(!cloud.signedIn){showModal("Sign in with GitHub",'<p>GitHub authentication lets you save designs across devices using your private D1 project area.</p><button id="github-login" class="primary">Continue with GitHub</button>');$("github-login").onclick=()=>execute(()=>cloud.login());return;}
+  showModal("BuildStudio Cloud",'<p>Signed in as <strong>'+escape(cloud.user.login)+'</strong>.</p><div class="button-row"><button class="primary" id="cloud-save">Save current design</button><button id="cloud-list">Open cloud project</button><button id="cloud-signout">Sign out</button></div><div id="cloud-results"></div>');
+  $("cloud-signout").onclick=()=>executeAsync(async()=>{await cloud.logout();closeModal();toast("Signed out");});
+  $("cloud-save").onclick=()=>executeAsync(async()=>{await cloud.save(store.active());store.persist();toast("Saved to cloud");});
+  $("cloud-list").onclick=()=>executeAsync(async()=>{
+    const panel=$("cloud-results");panel.textContent="Loading…";
+    const list=await cloud.list();
+    panel.innerHTML=list.map(p=>'<div class="modal-row"><button data-cloud="'+escape(p.id)+'">'+escape(p.name)+'</button><small>'+escape(p.updated_at||"")+'</small></div>').join("")||'<p class="hint">No cloud projects yet.</p>';
+    panel.querySelectorAll("[data-cloud]").forEach(button=>button.onclick=()=>executeAsync(async()=>{
+      const remote=await cloud.load(button.dataset.cloud);
+      if(!validateProject(remote.data))throw Error("Invalid remote design");
+      const p=store.importJSON({name:remote.name,data:normalizeProject(remote.data)});
+      p.remoteId=remote.id;p.remoteUpdatedAt=remote.updated_at;store.persist();closeModal();toast("Cloud project opened");
+    }));
+  });
+}
+function keyboard(event){
+  const target=event.target;
+  if(target instanceof HTMLElement && (target.matches("input,select,textarea")||target.isContentEditable)||$("modal").open)return;
+  const key=event.key.toLowerCase(),mod=event.ctrlKey||event.metaKey;
+  if(mod&&key==="z"){event.preventDefault();event.shiftKey?store.redo():store.undo();}
+  else if(mod&&key==="y"){event.preventDefault();store.redo();}
+  else if(mod&&key==="s"){event.preventDefault();store.persist();toast("Saved locally");}
+  else if(mod&&key==="d"&&store.selected){event.preventDefault();execute(()=>store.duplicate());}
+  else if(mod&&key==="e"){event.preventDefault();exportDialog();}
+  else if(mod&&key==="c"&&store.selected){event.preventDefault();copySelection();}
+  else if(mod&&key==="v"&&copied){event.preventDefault();pasteSelection();}
+  else if(!mod&&!event.altKey&&store.selected&&["arrowleft","arrowright","arrowup","arrowdown"].includes(key)){
+    event.preventDefault();const distance=event.shiftKey?.05:.01;
+    const x=key==="arrowleft"?-distance:key==="arrowright"?distance:0;
+    const y=key==="arrowup"?-distance:key==="arrowdown"?distance:0;
+    execute(()=>store.change(data=>{const n=data.nodes.find(n=>n.id===store.selected);adjustNode(data,n.id,{x:n.x+x,y:n.y+y});}));
+  }else if(["delete","backspace"].includes(key)&&store.selected){event.preventDefault();execute(()=>store.removeNode());}
+  else if(key==="escape")store.select(null);
+}
+function copySelection(){
+  const nodes=store.data.nodes,root=nodes.find(n=>n.id===store.selected);if(!root)return;
+  const selectedIds=new Set([root.id]);let changed=true;
+  while(changed){changed=false;for(const n of nodes)if(n.parent&&selectedIds.has(n.parent)&&!selectedIds.has(n.id)){selectedIds.add(n.id);changed=true;}}
+  copied={root:root.id,nodes:nodes.filter(n=>selectedIds.has(n.id)).map(n=>structuredClone(n))};toast("Copied "+copied.nodes.length+" component(s)");
+}
+function pasteSelection(){
+  if(!copied)return;
+  execute(()=>store.change(data=>{
+    const parents=new Map();let first=null;
+    for(const source of copied.nodes){
+      const next=addNode(data,source.type,source.id===copied.root?null:parents.get(source.parent)||null);
+      const id=next.id,parent=next.parent;
+      Object.assign(next,structuredClone(source),{id,parent,name:(source.name+"_Copy").slice(0,120)});
+      next.x=Math.min(1,Math.max(-1,source.x+.025));next.y=Math.min(1,Math.max(-1,source.y+.025));
+      parents.set(source.id,id);if(source.id===copied.root)first=id;
+    }
+    store.selected=first;
+  }));
+}
+$("projects").onclick=projectDialog;$("undo").onclick=()=>store.undo();$("redo").onclick=()=>store.redo();
+$("code").onclick=()=>codeDialog();$("export").onclick=exportDialog;$("account").onclick=accountDialog;
+$("audit").onclick=auditDialog;$("help").onclick=shortcutsDialog;
+$("preview").onclick=()=>{preview=!preview;$("preview").classList.toggle("active",preview);$("preview").textContent=preview?"◉ Editing off":"◉ Preview";canvas.render();toast(preview?"Preview mode":"Edit mode");};
+$("snap").onclick=()=>{snap=!snap;$("snap").setAttribute("aria-pressed",String(snap));$("snap").textContent=snap?"♯ Snap 2.5%":"♯ Snap off";$("canvas-grid").classList.toggle("snap-grid",snap);};
+$("grid").onclick=()=>{showGrid=!showGrid;$("grid").setAttribute("aria-pressed",String(showGrid));$("canvas-grid").classList.toggle("hidden",!showGrid);};
+$("zoom-in").onclick=()=>setZoom(zoom+25);$("zoom-out").onclick=()=>setZoom(zoom-25);
+$("devices").onclick=event=>{const b=event.target.closest("[data-device]");if(b)setDevice(b.dataset.device);};
+$("components-tab").onclick=()=>showTab("components");$("layers-tab").onclick=()=>showTab("layers");
+$("component-search").oninput=event=>{componentSearch=event.target.value;renderComponents();};
+$("layer-search").oninput=event=>{layerSearch=event.target.value;renderLayers();};
+$("components").onclick=event=>{const b=event.target.closest("[data-add]");if(b)execute(()=>{store.createNode(b.dataset.add);closeMobile();toast(b.dataset.add+" added");});};
+$("templates").onclick=event=>{const b=event.target.closest("[data-template]");if(!b)return;if(store.data.nodes.length&&!confirm("Replace this project's design with "+b.dataset.template+"?"))return;execute(()=>{store.replaceTemplate(b.dataset.template);closeMobile();toast("Template loaded");});};
+$("layers").onclick=event=>{const b=event.target.closest("[data-layer]");if(!b)return;store.select(b.dataset.layer);if(mobile())openMobile("right");};
+$("file-import").onchange=async event=>{const f=event.target.files?.[0];if(!f)return;try{if(f.size>150000)throw Error("Project file exceeds 150 KB");store.importJSON(await f.text());closeModal();toast("Project imported");}catch(error){toast(error.message);}event.target.value="";};
 $("show-components").onclick=()=>{showTab("components");openMobile("left");};
 $("show-layers").onclick=()=>{showTab("layers");openMobile("left");};
 $("show-properties").onclick=()=>openMobile("right");
 $("show-canvas").onclick=closeMobile;
 $("mobile-add").onclick=()=>{showTab("components");openMobile("left");};
 $("mobile-properties").onclick=closeMobile;
-$("board").addEventListener("pointerdown",e=>{if(e.target===$("board")||e.target.id==="elements") {selected=null;render();}});
-window.addEventListener("keydown",e=>{if(e.target.closest("input,textarea,select")||$("modal").open)return;const mod=e.ctrlKey||e.metaKey;if(mod&&e.key.toLowerCase()==="z"){e.preventDefault();if(e.shiftKey)redo();else undo();}if(mod&&e.key.toLowerCase()==="y"){e.preventDefault();redo();}if(mod&&e.key.toLowerCase()==="s"){e.preventDefault();persist();toast("Saved locally");}if(mod&&e.key.toLowerCase()==="d"&&selected){e.preventDefault();duplicate();}
-if(!mod&&!e.altKey&&selected&&["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key)){e.preventDefault();const step=e.shiftKey?.05:.01;const dx=e.key==="ArrowLeft"?-step:e.key==="ArrowRight"?step:0;const dy=e.key==="ArrowUp"?-step:e.key==="ArrowDown"?step:0;mutate(data=>{const n=data.nodes.find(n=>n.id===selected);if(n)adjustNode(data,selected,{x:n.x+dx,y:n.y+dy});});}if((e.key==="Delete"||e.key==="Backspace")&&selected){e.preventDefault();remove();}});
-render();persist();resumeOAuth();}
-function showTab(tab){$("components-panel").hidden=tab!=="components";$("layers-panel").hidden=tab!=="layers";$("components-tab").classList.toggle("active",tab==="components");$("layers-tab").classList.toggle("active",tab==="layers");}
-function openMobile(which){closeMobile();$(which).classList.add("mobile-open");}function closeMobile(){document.querySelectorAll(".pane").forEach(e=>e.classList.remove("mobile-open"));}
-function render(){const p=active();if(!p)return;$("projects").textContent=p.name+" ▾";$("board-name").textContent=p.name;const nodes=p.data.nodes;$("undo").disabled=!history.length;$("redo").disabled=!future.length;$("object-count").textContent=nodes.length+" components";$("selection-label").textContent=selected?(nodes.find(n=>n.id===selected)?.name||"No selection"):"No selection";
-const holder=$("elements");holder.replaceChildren();const make=(parent,id)=>{for(const n of nodes.filter(x=>x.parent===id)){const el=document.createElement("div");el.className="element"+(n.id===selected&&!preview?" selected":"");el.dataset.node=n.id;el.style.left=(n.x*100)+"%";el.style.top=(n.y*100)+"%";el.style.width=(n.w*100)+"%";el.style.height=(n.h*100)+"%";el.style.background=n.type==="TextLabel"||n.type==="ImageLabel"?"transparent":n.color;el.style.color=n.textColor;el.style.opacity="1";el.style.backgroundColor=/^#[0-9a-f]{6}$/i.test(n.color)?`rgba(${parseInt(n.color.slice(1,3),16)},${parseInt(n.color.slice(3,5),16)},${parseInt(n.color.slice(5,7),16)},${1-Math.max(0,Math.min(100,Number(n.opacity)||0))/100})`:"transparent";el.style.borderRadius=n.radius+"px";el.style.border=n.border+"px solid "+n.borderColor;el.style.fontSize="clamp(8px,"+n.fontSize/16+"vw,24px)";
-if(n.type.startsWith("Text")){const span=document.createElement("span");span.className="label";span.textContent=n.text;el.append(span);}
-if(n.type.startsWith("Image")){const span=document.createElement("span");span.className="label";span.textContent=n.image?"Image "+n.image:"▧ Image";el.append(span);}
-if(n.id===selected&&!preview){const h=document.createElement("span");h.className="resize";h.dataset.resize="1";el.append(h);}el.addEventListener("pointerdown",e=>startDrag(e,n,el));parent.append(el);make(el,n.id);}};
-make(holder,null);
-$("layers").innerHTML=nodes.map(n=>'<button class="layer'+(n.id===selected?" active":"")+'" data-node="'+escapeText(n.id)+'" style="padding-left:'+(10+depth(n,nodes)*13)+'px">▣ '+escapeText(n.name)+' <small>'+escapeText(n.type)+'</small></button>').join("");
-$("layers").querySelectorAll("[data-node]").forEach(b=>b.onclick=()=>{selected=b.dataset.node;render();if(window.matchMedia("(max-width:780px)").matches)openMobile("right");});
-inspector();
-}
-function depth(n,nodes){let d=0;while(n.parent&&d<15){n=nodes.find(x=>x.id===n.parent);if(!n)break;d++;}return d;}
-function startDrag(e,n,el){e.stopPropagation();selected=n.id;if(preview){render();return;}const bounds=el.parentElement.getBoundingClientRect();drag={id:n.id,x:e.clientX,y:e.clientY,w:Math.max(1,bounds.width),h:Math.max(1,bounds.height),initial:{x:n.x,y:n.y,w:n.w,h:n.h},resize:!!e.target.dataset.resize};snapshot();el.setPointerCapture(e.pointerId);el.onpointermove=move;el.onpointerup=end;el.onpointercancel=end;renderInspectorOnly();}
-function move(e){if(!drag)return;const n=active().data.nodes.find(n=>n.id===drag.id);if(!n)return;const dx=(e.clientX-drag.x)/drag.w,dy=(e.clientY-drag.y)/drag.h;if(drag.resize){adjustNode(active().data,n.id,{w:drag.initial.w+dx,h:drag.initial.h+dy},{snap:snapEnabled});}else{adjustNode(active().data,n.id,{x:drag.initial.x+dx,y:drag.initial.y+dy},{snap:snapEnabled});}const el=document.querySelector('[data-node="'+n.id+'"].element');if(el){el.style.left=(n.x*100)+"%";el.style.top=(n.y*100)+"%";el.style.width=(n.w*100)+"%";el.style.height=(n.h*100)+"%";}renderInspectorOnly();}
-function end(){if(!drag)return;drag=null;schedule();render();}
-function renderInspectorOnly(){const n=active().data.nodes.find(n=>n.id===selected);if(!n)return;for(const name of ["x","y","w","h"]){const input=$("prop-"+name);if(input&&document.activeElement!==input)input.value=Math.round(n[name]*1000)/10;}}
-function duplicate(){if(!selected)return;mutate(data=>{const n=duplicateNode(data,selected);if(n)selected=n.id;});}
-function remove(){if(!selected)return;mutate(data=>deleteNode(data,selected));selected=null;render();}
-function inspector(){const host=$("inspector");const p=active(),n=p.data.nodes.find(n=>n.id===selected);if(!n){host.innerHTML='<p class="hint">Choose a UI component to edit its position, size, colors and text.</p>';return;}
-const prop=(key,label,value,type="text")=>'<div class="prop"><label for="prop-'+key+'">'+label+'</label><input id="prop-'+key+'" data-prop="'+key+'" type="'+type+'" value="'+escapeText(value)+'"></div>';
-host.innerHTML='<div class="eyebrow">'+escapeText(n.type)+'</div>'+prop("name","Object name",n.name)+
-'<div class="prop-grid">'+["x","y","w","h"].map((k,i)=>prop(k,["X · %","Y · %","Width · %","Height · %"][i],Math.round(n[k]*1000)/10,"number")).join("")+'</div>'+
-(n.type.startsWith("Text")?prop("text","Text",n.text):"")+
-(n.type.startsWith("Image")?prop("image","Roblox asset ID",n.image):"")+
-'<div class="prop-grid">'+prop("color","Background",n.color,"color")+prop("textColor","Text color",n.textColor,"color")+prop("borderColor","Border color",n.borderColor,"color")+prop("opacity","Transparency %",n.opacity,"number")+prop("radius","Corner radius",n.radius,"number")+prop("fontSize","Text size",n.fontSize,"number")+prop("border","Border width",n.border,"number")+'</div>'+
-'<p class="eyebrow">QUICK LAYOUT</p><div class="small-buttons"><button data-align="center-x" title="Center horizontally in parent">Center X</button><button data-align="center-y" title="Center vertically in parent">Center Y</button><button data-align="fill-width">Fill width</button><button data-align="fill-height">Fill height</button></div><div class="small-buttons"><button id="duplicate">Duplicate</button><button id="raise">Raise</button><button id="lower">Lower</button><button id="delete">Delete</button></div>';
-host.querySelectorAll("[data-prop]").forEach(i=>i.onchange=()=>{const k=i.dataset.prop;let value=i.value;if(["x","y","w","h"].includes(k)){value=Number(value)/100;if(!Number.isFinite(value)){toast("Enter a valid percentage");return;}}else if(["opacity","radius","fontSize","border"].includes(k)){value=Number(value);if(!Number.isFinite(value)){toast("Enter a valid number");return;}const bounds={opacity:[0,100],radius:[0,100],fontSize:[6,96],border:[0,24]}[k];value=Math.max(bounds[0],Math.min(bounds[1],value));}mutate(data=>{const row=data.nodes.find(x=>x.id===selected);if(row){if(["x","y","w","h"].includes(k))adjustNode(data,selected,{[k]:value});else row[k]=value;}});});
-host.querySelectorAll("[data-align]").forEach(b=>b.onclick=()=>mutate(data=>alignNode(data,selected,b.dataset.align)));
-$("duplicate").onclick=duplicate;$("delete").onclick=remove;
-$("raise").onclick=()=>mutate(d=>reorderNode(d,selected,"up"));
-$("lower").onclick=()=>mutate(d=>reorderNode(d,selected,"down"));
-}
-function modal(title,content){$("modal-title").textContent=title;$("modal-body").innerHTML=content;$("modal").showModal();}
-function download(content,name,mime){const blob=new Blob([content],{type:mime});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-function projectDialog(){modal("Your projects",'<p class="hint">Projects autosave on this device. Export JSON to back them up.</p><div id="project-list"></div><div class="small-buttons"><button id="new">New project</button><button id="rename">Rename</button><button id="json-export">Export JSON</button><button id="json-import">Import JSON</button></div>');const draw=()=>{$("project-list").innerHTML=projects.map(p=>'<div class="row"><button data-open="'+escapeText(p.id)+'">'+escapeText(p.name)+'</button><button data-delete="'+escapeText(p.id)+'" title="Delete">✕</button></div>').join("");$("project-list").onclick=e=>{const o=e.target.closest("[data-open]"),d=e.target.closest("[data-delete]");if(o){setProject(projects.find(p=>p.id===o.dataset.open));$("modal").close();}if(d&&projects.length>1&&confirm("Delete project permanently from this device?")){projects=projects.filter(p=>p.id!==d.dataset.delete);if(!active())currentId=projects[0].id;persist();draw();render();}};};draw();
-$("new").onclick=()=>{const name=prompt("New project name","Untitled UI");if(!name)return;const p=createProject(name,templates.blank());projects.push(p);setProject(p);$("modal").close();};
-$("rename").onclick=()=>{const name=prompt("Rename project",active().name);if(name){active().name=name.slice(0,70);schedule();render();$("modal").close();}};
-$("json-export").onclick=()=>download(JSON.stringify({name:active().name,data:active().data},null,2),active().name.replace(/[^a-z0-9]+/gi,"-")+".json","application/json");
-$("json-import").onclick=()=>$("file-import").click();
-}
-function codeDialog(){modal("Generated Luau",'<p class="hint">Paste this script into a LocalScript in StarterPlayerScripts.</p><pre id="code-view"></pre><button class="primary" id="dl-luau">Download .luau</button> <button id="copy-luau">Copy code</button>');const code=makeLuau(active().data);$("code-view").textContent=code;$("dl-luau").onclick=()=>$("export").click();$("copy-luau").onclick=()=>navigator.clipboard.writeText(code).then(()=>toast("Luau copied")).catch(()=>toast("Use Download instead"));}
-async function callApi(path,options={}){const r=await fetch(apiBase+path,{...options,headers:{"Content-Type":"application/json",...(token?{"Authorization":"Bearer "+token}:{}),...(options.headers||{})}});const body=await r.json();if(!r.ok)throw Error(body.error||"API unavailable");return body;}
-async function resumeOAuth(){const ticket=location.hash.match(/^#auth=([0-9a-f]{64})$/)?.[1];if(ticket){history.replaceState(null,"",location.pathname+location.search);if(apiBase){try{const r=await callApi("/api/auth/exchange",{method:"POST",body:JSON.stringify({ticket})});token=r.token;sessionStorage.setItem("buildstudio.token",token);user=r.user;toast("Signed in as "+user.login);}catch(e){toast(e.message);}}}else if(apiBase&&token){try{user=(await callApi("/api/me")).user;}catch{token="";sessionStorage.removeItem("buildstudio.token");}}}
-async function accountDialog(){if(!apiBase){modal("Connect BuildStudio Cloud",'<p>The visual editor works offline now. GitHub OAuth and cross-device cloud storage require deployment of the included BuildStudio Cloudflare Worker and configuration of <code>docs/config.js</code>.</p><p>Do not reuse the former Collab.io database or OAuth credentials without a deliberate migration.</p>');return;}
-if(!user){modal("GitHub sign-in",'<p>Sign in securely using GitHub. The Worker stores private BuildStudio designs in its own D1 database.</p><button class="primary" id="sign-in">Sign in with GitHub</button>');$("sign-in").onclick=()=>location.assign(apiBase+"/auth/github");return;}
-modal("BuildStudio Cloud",'<p>Signed in as <strong>'+escapeText(user.login)+'</strong></p><div class="small-buttons"><button class="primary" id="cloud-save">Save to cloud</button><button id="cloud-browse">Browse cloud</button><button id="logout">Sign out</button></div><div id="cloud-results"></div>');
-$("logout").onclick=async()=>{try{await callApi("/api/logout",{method:"POST"});}catch{}token="";user=null;sessionStorage.removeItem("buildstudio.token");$("modal").close();toast("Signed out");};
-$("cloud-save").onclick=async()=>{try{const p=active(),body=JSON.stringify({name:p.name,data:p.data});let response;try{response=p.remoteId?await callApi("/api/projects/"+p.remoteId,{method:"PUT",body}):await callApi("/api/projects",{method:"POST",body});}catch(e){if(p.remoteId&&/not found/i.test(e.message))response=await callApi("/api/projects",{method:"POST",body});else throw e;}p.remoteId=response.project.id;persist();toast("Saved to cloud");}catch(e){toast(e.message);}};
-$("cloud-browse").onclick=async()=>{const panel=$("cloud-results");panel.textContent="Loading…";try{const r=await callApi("/api/projects");panel.innerHTML=r.projects.map(p=>'<div class="row"><button data-cloud="'+escapeText(p.id)+'">'+escapeText(p.name)+'</button></div>').join("")||"<p>No cloud projects yet.</p>";panel.querySelectorAll("[data-cloud]").forEach(b=>b.onclick=async()=>{try{const r=await callApi("/api/projects/"+b.dataset.cloud);if(!validateProject(r.project.data))throw Error("Invalid remote data");const p=createProject(r.project.name,r.project.data);p.remoteId=r.project.id;projects.push(p);setProject(p);$("modal").close();toast("Cloud design loaded");}catch(e){toast(e.message);}});}catch(e){panel.textContent=e.message;}};
-}
-init();
+document.addEventListener("keydown",keyboard);
+window.addEventListener("pagehide",()=>store.persist());
+renderComponents();render();setDevice("desktop");
+executeAsync(async()=>{const person=await cloud.initialize();if(person)toast("Signed in as "+person.login);});

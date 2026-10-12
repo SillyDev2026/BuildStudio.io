@@ -6,8 +6,8 @@ const fail = (message,status=400) => send({error:message},status);
 const hex = bytes => Array.from(bytes,x=>x.toString(16).padStart(2,"0")).join("");
 const random = () => hex(crypto.getRandomValues(new Uint8Array(32)));
 const digest = async text => hex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(text))));
-const TYPES = new Set(["Frame","TextLabel","TextButton","TextBox","ImageLabel","ImageButton","ScrollingFrame"]);
-const CONTAINERS = new Set(["Frame","ScrollingFrame"]);
+const TYPES = new Set(["Frame","CanvasGroup","TextLabel","TextButton","TextBox","ImageLabel","ImageButton","ScrollingFrame"]);
+const CONTAINERS = new Set(["Frame","CanvasGroup","ScrollingFrame"]);
 function validate(payload) {
   if (!payload || typeof payload.name !== "string" || !payload.name.trim() || payload.name.length > 100 || !payload.data || !Array.isArray(payload.data.nodes) || payload.data.nodes.length > 500) return null;
   const map = new Map();
@@ -15,6 +15,9 @@ function validate(payload) {
     if (!n || !n.id || typeof n.id !== "string" || n.id.length > 100 || map.has(n.id) || !TYPES.has(n.type) || typeof n.name !== "string" || typeof n.text !== "string" || typeof n.image !== "string") return null;
     if (!["x","y","w","h"].every(k=>Number.isFinite(n[k]) && n[k]>=-1 && n[k]<=4)) return null;
     if (n.text.length > 5000 || n.image.length > 500 || n.name.length > 120) return null;
+    for (const key of ["anchorX","anchorY","rotation","zIndex","opacity","radius","border","fontSize","stroke","aspect","padding"]) if (n[key] !== undefined && (!Number.isFinite(n[key]) || Math.abs(n[key]) > 10000)) return null;
+    for (const key of ["color","textColor","borderColor","strokeColor"]) if (n[key] !== undefined && (typeof n[key] !== "string" || !/^#[0-9a-fA-F]{6}$/.test(n[key]))) return null;
+    if (n.layout !== undefined && !["none","vertical","horizontal","grid"].includes(n.layout)) return null;
     map.set(n.id,n);
   }
   for (const n of map.values()) {
@@ -121,9 +124,11 @@ async function api(request,env,path) {
     if (request.method==="GET") return send({project:rowProject(row,true)});
     if (request.method==="DELETE") {await env.DB.prepare("DELETE FROM projects WHERE id=? AND user_id=?").bind(row.id,user.github_id).run();return send({ok:true});}
     if (request.method==="PUT") {
-      const cleaned = validate(await readBody(request));
+      const payload = await readBody(request);
+      const cleaned = validate(payload);
       if (!cleaned) return fail("Invalid project format",422);
-      const time = now();
+      if (payload.expected_updated_at && payload.expected_updated_at !== new Date(row.updated_at).toISOString()) return fail("Cloud project changed since you last opened it. Reload before saving.",409);
+      const time = Math.max(now(),row.updated_at+1);
       await env.DB.prepare("UPDATE projects SET name=?,doc_json=?,updated_at=? WHERE id=? AND user_id=?").bind(cleaned.name,JSON.stringify(cleaned.data),time,row.id,user.github_id).run();
       return send({project:{id:row.id,name:cleaned.name,created_at:new Date(row.created_at).toISOString(),updated_at:new Date(time).toISOString()}});
     }
