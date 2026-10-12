@@ -1,4 +1,4 @@
-# BuildStudio.io
+# BuildStudio.io\n\n## Version 0.2 — Precision editing\n- Drag and resize nested children accurately relative to their parent frame, not the whole screen.\n- Snap: Off / Snap: 2.5% toggle for canvas drag and resize.\n- Keyboard arrows nudge selected components 1% of their parent; Shift+arrows nudge 5%.\n- Quick layout actions: Center X, Center Y, Fill width, Fill height (all parent-relative).\n- Raise/Lower stays within the current parent’s sibling layers.\n- Inspector clamps invalid geometry and numeric ranges, and canvas transparency now previews the background without fading labels.\n- Layers selection on mobile opens Properties automatically.\n- Node geometry, alignment and reordering have regression tests.\n\n
 
 Visual Roblox UI designer. The old Collab.io website and API files have been replaced.
 

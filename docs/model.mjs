@@ -29,6 +29,49 @@ node("shop-name2","ItemName2","TextLabel","shop-card2",.1,.1,.8,.3,"Shield"),
 node("shop-buy1","Buy1","TextButton","shop-card1",.1,.62,.8,.24,"BUY 50","#18b98d"),
 node("shop-buy2","Buy2","TextButton","shop-card2",.1,.62,.8,.24,"BUY 75","#18b98d") ]})
 };
+
+/** Return a scale-coordinate snapped to a configurable parent-relative grid. */
+export function snapScale(value, step = 0.025) {
+  if (!Number.isFinite(value) || !Number.isFinite(step) || step <= 0) throw Error("Invalid snap value");
+  return Math.round(Math.round(value / step) * step * 10000) / 10000;
+}
+/** Change geometry without allowing negative dimensions or invalid Luau scales. */
+export function adjustNode(data, id, values, options = {}) {
+  const target = data.nodes.find(n => n.id === id);
+  if (!target) return null;
+  for (const key of ["x", "y", "w", "h"]) {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+    let value = Number(values[key]);
+    if (!Number.isFinite(value)) throw Error("Invalid geometry");
+    if (options.snap) value = snapScale(value, options.step || 0.025);
+    const size = key === "w" || key === "h";
+    target[key] = Math.round(clamp(value, size ? 0.015 : -1, size ? 1.5 : 1) * 10000) / 10000;
+  }
+  return target;
+}
+/** Align within the immediate parent, not the entire ScreenGui. */
+export function alignNode(data, id, action) {
+  const target = data.nodes.find(n => n.id === id);
+  if (!target) return null;
+  if (action === "center-x") return adjustNode(data, id, {x: (1 - target.w) / 2});
+  if (action === "center-y") return adjustNode(data, id, {y: (1 - target.h) / 2});
+  if (action === "fill-width") return adjustNode(data, id, {x: 0.05, w: 0.9});
+  if (action === "fill-height") return adjustNode(data, id, {y: 0.05, h: 0.9});
+  throw Error("Unknown alignment");
+}
+/** Arrange only within siblings so nested layer order stays predictable. */
+export function reorderNode(data, id, direction) {
+  if (direction !== "up" && direction !== "down") throw Error("Unknown layer direction");
+  const index = data.nodes.findIndex(n => n.id === id);
+  if (index < 0) return false;
+  const parent = data.nodes[index].parent;
+  const siblingIndexes = data.nodes.map((n, i) => n.parent === parent ? i : -1).filter(i => i >= 0);
+  const position = siblingIndexes.indexOf(index);
+  const neighbor = siblingIndexes[position + (direction === "up" ? 1 : -1)];
+  if (neighbor === undefined) return false;
+  [data.nodes[index], data.nodes[neighbor]] = [data.nodes[neighbor], data.nodes[index]];
+  return true;
+}
 const luaString = value => '"'+String(value||"").replace(/\\/g,"\\\\").replace(/"/g,'\\"').replace(/\n/g,"\\n").replace(/\r/g,"\\r")+'"';
 const color = val=> { const h=/^#[0-9a-fA-F]{6}$/.test(val)?val:"#ffffff";return "Color3.fromRGB("+[1,3,5].map(i=>parseInt(h.slice(i,i+2),16)).join(", ")+")";};
 const num=n=>String(Math.round(Number(n)*100000)/100000);
