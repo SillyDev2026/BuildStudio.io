@@ -283,13 +283,21 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
       '<div class="flex mt-24"><button class="btn danger small" data-delete-project="' + esc(p.id) + '">' + icon("trash", "tiny") + ' Delete project</button></div>';
   }
   function teamPage() {
-    return pageHead("Team & access", "Manage collaborators and permissions once the secure backend is connected.") +
-      '<div class="notice">' + icon("shield") + '<div><strong>Invitations are not active</strong><p>Account login, invitations, and access controls require the cloud backend. No invitation is sent from this preview.</p></div></div>' +
-      '<div class="two-col"><section class="card panel"><div class="section-head"><h2>Workspace members</h2>' + badge("Local") +
-      '</div><div class="member-row"><span class="avatar">YOU</span><div><strong>You (this device)</strong><p>Local preview administrator</p></div>' +
-      badge("Owner", "purple") + '</div></section><section class="card panel"><h2>Coming with cloud sync</h2><p>Invite contributors by Discord or link, review pending invitations, and assign role-based permissions.</p>' +
-      '<div class="feature-grid"><div>' + badge("Owner") + '</div><div>' + badge("Editor") + '</div><div>' + badge("Reviewer") +
-      '</div><div>' + badge("Viewer") + '</div></div></section></div>';
+    var head = pageHead("Team & access", "Assign secure project permissions through signed-in GitHub accounts.");
+    if (!signedIn()) return head + '<div class="notice">' + icon("shield") +
+      '<div><strong>GitHub sign-in required</strong><p>Deploy the backend to activate access control. Discord invitations are not connected yet.</p></div></div>' +
+      '<button class="btn primary" data-signin="1">Sign in with GitHub</button>';
+    var eligible = cloudProjects.filter(function (p) { return p.role === "owner"; });
+    return head + '<div class="notice">' + icon("shield") +
+      '<div><strong>Account-based collaborators</strong><p>The collaborator must sign in to Collab.io with GitHub at least once. Adding a member grants access immediately; the invitation/acceptance flow and Discord notifications are future features.</p></div></div>' +
+      '<div class="card panel"><h2>Add collaborator</h2>' +
+      (eligible.length ? '<form id="member-form"><div class="form-field"><label for="member-project">Owned cloud project</label>' +
+      '<select id="member-project" name="project" required>' + eligible.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="form-field"><label for="member-login">GitHub username</label><input id="member-login" maxlength="39" name="login" placeholder="GitHub username" autocomplete="off" required></div>' +
+      '<div class="form-field"><label for="member-role">Permission</label><select id="member-role" name="role"><option value="editor">Editor</option><option value="viewer">Viewer</option></select></div>' +
+      '<button class="btn primary" type="submit">Add collaborator</button> <button type="button" class="btn" data-show-members="1">View members</button>' +
+      '<div id="member-output" aria-live="polite"></div></form>' : '<p>You need to publish a project to the cloud before adding members.</p>') +
+      '</div><div class="card doc-box mt-24"><h3>Role permissions</h3><p>Owners can grant access; editors can save a new revision; viewers have read-only access. Cloud changes require expected revision checks to prevent silently overwriting another developer’s work.</p></div>';
   }
   function activityPage() {
     return pageHead("Activity history", "Review saved actions on this device. Example entries are labeled.") +
@@ -533,7 +541,8 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
     } catch (_) { notice("Copy is unavailable in this browser."); }
   }
   document.addEventListener("click", function (event) {
-    var el = event.target.closest("[data-menu],[data-close-nav],[data-new-project],[data-open],[data-script],[data-save-script],[data-new-script],[data-delete-project],[data-close-modal],[data-reset],[data-copy],[data-complete],[data-find-next],[data-indent],[data-export-script],[data-signin],[data-signout],[data-sync-cloud],[data-import-cloud],[data-refresh-cloud]");
+    var el = event.target.closest("[data-menu],[data-close-nav],[data-new-project],[data-open],[data-script],[data-save-script],[data-new-script],[data-delete-project],[data-close-modal],[data-reset],[data-copy],[data-complete],[data-find-next],[data-indent],[data-export-script],[data-signin],[data-signout],[data-sync-cloud],[data-import-cloud],[data-refresh-cloud],[data-show-members]");
+    if (el && el.hasAttribute("data-show-members")) { showMembers(); return; }
     if (el && el.hasAttribute("data-signin")) { startSignIn(); return; }
     if (el && el.hasAttribute("data-signout")) { signOut(); return; }
     if (el && el.hasAttribute("data-sync-cloud")) { syncCloud(el.dataset.syncCloud); return; }
@@ -589,8 +598,31 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
     }
     else if (el.hasAttribute("data-copy")) copy(el.dataset.copy);
   });
+  async function showMembers() {
+    var select = document.getElementById("member-project");
+    var output = document.getElementById("member-output");
+    if (!select || !output) return;
+    try {
+      var result = await callAPI("/api/projects/" + encodeURIComponent(select.value) + "/members");
+      output.innerHTML = '<h3 class="mt-18">Project members</h3>' + result.members.map(function (m) {
+        return '<div class="member-row"><span class="avatar">' + esc(m.login.slice(0,2).toUpperCase()) +
+          '</span><div><strong>@' + esc(m.login) + '</strong><p>' + esc(m.role) + '</p></div></div>';
+      }).join("");
+    } catch (error) { notice(error.message); }
+  }
+  async function inviteMember(form) {
+    var data = new FormData(form);
+    try {
+      await callAPI("/api/projects/" + encodeURIComponent(String(data.get("project"))) + "/members", "POST",
+        { login: String(data.get("login") || "").trim(), role: String(data.get("role") || "viewer") });
+      notice("Member access updated.");
+      document.getElementById("member-login").value = "";
+      await showMembers();
+    } catch (error) { notice("Team: " + error.message); }
+  }
   document.addEventListener("submit", function (event) {
-    if (event.target.id === "project-form") { event.preventDefault(); createProject(event.target); }
+    if (event.target.id === "member-form") { event.preventDefault(); inviteMember(event.target); }
+    else if (event.target.id === "project-form") { event.preventDefault(); createProject(event.target); }
     else if (event.target.id === "script-form") { event.preventDefault(); createScript(event.target); }
   });
   document.addEventListener("input", function (event) {
