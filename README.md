@@ -1,87 +1,69 @@
-# BuildStudio.io v1.0
+# BuildStudio Studio Connect v1.1 — No Cloudflare
 
-Clean, dependency-free Roblox UI builder for desktop and mobile. Build ScreenGui designs visually, keep projects in your browser, export editable Luau code, or import saved JSON into Roblox Studio with the bundled plugin.
+BuildStudio.io now includes a local Node.js bridge and a Roblox Studio plugin for two-way UI synchronization. The website stays on GitHub Pages, while your computer stores project snapshots locally. Studio Connect needs no Cloudflare, D1, OAuth, or GitHub credentials.
 
-**Website:** https://sillydev2026.github.io/BuildStudio.io/  
-**Repository:** https://github.com/SillyDev2026/BuildStudio.io
+## One-time setup on Windows
 
-## The 0.2 → 1.0 feature roadmap (implemented together in v1)
+1. Install Node.js 22 or newer from https://nodejs.org.
+2. On GitHub, choose Code → Download ZIP for this repository and extract it.
+3. Double-click bridge/start-windows.cmd, or open a terminal at the repository root and run:
+   node bridge/server.mjs
+4. The terminal prints a 12-character pairing code. Leave that terminal open.
+5. In Roblox Studio, create a temporary Script, paste the full source from studio/BuildStudioConnect.luau, select the Script, and choose Plugins → Save as Local Plugin. Delete the temporary Script afterward.
+6. Open the BuildStudio Studio Connect plugin, enter the terminal code, and press Pair. Approve local HTTP requests if Studio prompts you.
+7. In a browser on that PC, open https://sillydev2026.github.io/BuildStudio.io/, click Connect Studio, enter the same code, and press Pair browser.
+8. Choose Use Website version or Use Studio version if the two sides hold different designs.
 
-| Milestone | Features |
-|---|---|
-| 0.2 | Nested UI components, undo/redo, visual inspector, responsive ratios, JSON and Luau export |
-| 0.3 | Standalone model, project store, canvas renderer, cloud client |
-| 0.4 | Redesigned desktop/mobile interface and accessible controls |
-| 0.5 | Parent-relative drag/resize, 2.5% snapping, 1% keyboard nudging, zoom |
-| 0.6 | Eight component types and nine starter templates |
-| 0.7 | Anchors, rotation, ZIndex, font styling, borders, stroke, padding and native Roblox layouts |
-| 0.8 | Searchable hierarchy, safe reparenting, layer ordering, clipboard, design audit |
-| 0.9 | Runtime and Studio Luau exporters plus an offline Studio JSON importer |
-| **1.0** | Full modular rewrite, v0.2 project migration, cloud schema compatibility, automated regression tests |
+Both the plugin and browser automatically reconnect using paired tokens on subsequent launches while Node is running. Sync is checked every 3 seconds. The bridge stores data in your home directory under .buildstudio-connect/state.json and binds exclusively to 127.0.0.1 by default.
 
-## How to use
+### Live behavior
 
-1. Open the website. Use **Components** to add objects and **Templates** for starter designs.
-2. Select a Frame, CanvasGroup, or ScrollingFrame before adding objects to nest them.
-3. Drag the objects to position, use their corner handles to resize, or edit exact scale percentages under Properties.
-4. Switch Desktop / Tablet / Phone aspect ratio; toggle Snap and Grid; change zoom.
-5. Use **Export** to generate LocalScript Luau, Studio Command Bar Luau, or a project JSON backup.
+- Website → Studio: UI elements, positions, hierarchy, styling, and names update StarterGui → BuildStudioGui.
+- Studio → website: Supported GuiObject edits under BuildStudioGui sync back to the browser.
+- Revision tracking prevents silent overwrites when both sides make edits. Choose the winning copy explicitly during a conflict.
+- Auth uses a random bearer token for each client. Only hashed tokens are persisted on the PC.
+- The plugin only replaces BuildStudioGui and does not edit other ScreenGuis.
 
-**LocalScript mode:** Paste the code into a LocalScript under StarterPlayer → StarterPlayerScripts. The code adds the screen to PlayerGui.
+This is short-interval synchronization rather than sub-second frame streaming. Complex Roblox UI instances and offsets may not round-trip exactly, and custom gameplay scripts are not synchronized. Back up important projects as JSON.
 
-**Studio mode:** Paste into Roblox Studio's Command Bar in edit mode. The code creates editable UI instances in StarterGui.
+## Optional: connect from a phone, still without Cloudflare
 
-**Studio plugin:** Open [studio/BuildStudioImporter.luau](studio/BuildStudioImporter.luau), copy its source to a Script in Roblox Studio, select the Script, and choose **Plugins → Save as Local Plugin**. Open the resulting BuildStudio widget and paste the *contents* of a BuildStudio JSON export to import into StarterGui. No HTTP access or cloud account required. See [Roblox's plugin documentation](https://create.roblox.com/docs/studio/plugins).
+On your phone, localhost points to the phone, not the PC. Use a secure Tailscale private tailnet if you want to edit on your phone while Studio runs on your PC:
 
-### Keyboard shortcuts
+1. Install Tailscale on the PC and phone, sign in to the same private tailnet, and enable HTTPS certificates.
+2. On the PC, while the Node bridge is running, execute:
+   tailscale serve --bg 38471
+3. Read the HTTPS .ts.net address printed by Tailscale Serve or run:
+   tailscale serve status
+4. Turn on Tailscale on your phone. Open BuildStudio.io, tap Connect Studio, paste the full private HTTPS .ts.net URL in Bridge address, and press Use this address.
+5. Enter the pairing code displayed on the PC, then pair the browser. Keep Roblox Studio, the Node bridge, and Tailscale running on the PC.
 
-| Shortcut | Action |
-|---|---|
-| Ctrl/Cmd + Z, Ctrl/Cmd + Y | Undo, redo |
-| Arrow, Shift + Arrow | Move selected node 1%, 5% |
-| Ctrl/Cmd + D | Duplicate selected subtree |
-| Ctrl/Cmd + C, Ctrl/Cmd + V | Copy/paste a selected subtree |
-| Delete or Backspace | Delete selected object and descendants |
-| Ctrl/Cmd + S, Ctrl/Cmd + E | Local save, export |
-| Escape | Deselect |
+This does not publicly expose the bridge. Do not use Tailscale Funnel, which shares it with the internet. Documentation: https://tailscale.com/docs/reference/tailscale-cli/serve
 
-### Project compatibility
+New Chrome versions may ask for Local Network Access permission when a public HTTPS website connects to localhost. Approve only when you are connecting to your own PC.
 
-The v1 editor continues to read browser storage key **buildstudio.v1.projects** and accepts the v0.2 JSON schema. Existing node IDs and parent relationships are preserved. Export JSON backups before deleting browser storage. Projects saved locally are not automatically published to the cloud.
+## API and security
 
-## Project structure
+Local base URL: http://127.0.0.1:38471
+Browser CORS origins: https://sillydev2026.github.io and localhost:8000 local development.
 
-- docs/index.html + docs/styles.css — responsive website
-- docs/model.mjs — portable schema, validation, templates, layout functions, Luau exporters
-- docs/store.mjs — browser storage, project management, migration, history
-- docs/canvas.mjs — recursive UI preview and drag/resize engine
-- docs/cloud.mjs — optional GitHub OAuth and D1 cloud adapter
-- docs/app.js — modular UI controller, dialogs, editor shortcuts
-- docs/config.js — public API URL only (no secrets)
-- studio/BuildStudioImporter.luau — local Studio plugin
-- worker/src/index.js — Cloudflare OAuth + private project API
-- worker/migrations/ — database schema
-- tests/ — automated unit tests and regressions
+- GET /health — unauthenticated health status (pair code never disclosed)
+- POST /v1/pair — one-time code + client role; returns randomly generated token
+- GET /v1/state — authenticated project snapshot and revision
+- PUT /v1/state — authenticated revision-checked snapshot update
+- POST /v1/disconnect — revoke a client token
 
-The frontend runs on GitHub Pages from branch **main**, folder **/docs**. It has no npm build step. To test locally, serve the repository root with Python's HTTP server and visit http://localhost:8000/docs/.
+The bridge persists only on your PC, rate-limits failed pairing, limits JSON bodies to 200 KB, and validates up to 500 components.
 
-Run **npm run check** and **npm test**. GitHub Actions also runs these on pushes and PRs.
+## Run tests
 
-## Optional GitHub account and cloud projects
+    npm run check
+    npm test
 
-1. Create a Cloudflare D1 database named **buildstudio-io**.
-2. Update the placeholder database UUID in worker/wrangler.jsonc with your own newly created BuildStudio database ID. Do not delete the old Collab.io D1 data.
-3. Create a GitHub OAuth App named BuildStudio.io with homepage https://sillydev2026.github.io/BuildStudio.io/ and callback https://YOUR_WORKER_HOST/auth/github/callback.
-4. Add repository Actions secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET.
-5. Run **Actions → Deploy BuildStudio API → Run workflow**. This applies the D1 migrations and deploys your Worker with secret configuration.
-6. Check your Worker /health endpoint and then set the public HTTPS Worker URL as apiUrl in docs/config.js.
+Node tests cover pairing, wrong origins, role restrictions, website-to-Studio and Studio-to-website updates, revision conflicts, and disk persistence. Roblox Studio-specific Luau integration requires manual Studio testing.
 
-Cloud projects are user-scoped; the API uses hashed bearer sessions, and v1 cloud updates accept an expected timestamp to detect conflicts. **Deploying GitHub Pages alone does not enable GitHub sign-in or remote saves.** The front end works locally even before cloud activation.
+## Compatibility
 
-## Limitations
+BuildStudio.io v1.0 features remain: responsive editor, hierarchy, templates, property inspector, JSON import/export, undo/redo, and two Luau exporters.
 
-- Browser preview approximates Roblox UI layout. Native Roblox UIListLayout/UIGridLayout are created in exports; they may differ from the preview.
-- Export generates visual UI instances. Button behavior, purchases, gameplay, Roblox data, and other functionality must be scripted separately.
-- Cloudflare/GitHub OAuth and a custom .io domain require manual service setup.
-- The Studio importer is an offline JSON importer, not live two-way Studio sync.
-- Automated Node tests do not execute the Studio plugin or validate live OAuth; those require manual Roblox/Cloudflare testing.
+The older optional Cloudflare Worker implementation remains in the repository for legacy compatibility. It is neither started nor required by Studio Connect, and its Cloud button is hidden on the website.
