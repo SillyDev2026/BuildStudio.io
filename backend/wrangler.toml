@@ -8,5 +8,5 @@ PUBLIC_ORIGIN = "https://sillydev2026.github.io/Collab.io/"
 [[d1_databases]]
 binding = "DB"
 database_name = "collab-io"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "62985660-551c-4ea3-8126-41ff1b32535f"
 migrations_dir = "migrations"
