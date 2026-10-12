@@ -1,94 +1,85 @@
-# Collab.io
+# Collab.io v0.2 — Roblox developer collaboration platform
 
-A Roblox developer collaboration workspace, currently available as a **browser-only frontend preview**.
+**Site:** https://sillydev2026.github.io/Collab.io/  
+**GitHub repository:** https://github.com/SillyDev2026/Collab.io
 
-**Repository:** https://github.com/SillyDev2026/Collab.io  
-**GitHub Pages (after enabling Pages):** https://sillydev2026.github.io/Collab.io/
+Collab.io is a mobile-friendly Roblox/Luau development workspace on GitHub Pages, with an optional Cloudflare backend for GitHub login, remote projects and role-based access. It is being developed alongside [Luau Developer Playground](https://github.com/SillyDev2026/Luau-Developer-Playground).
 
-## Current frontend (v0.1)
+## What works in v0.2
 
-- Dashboard with project statistics and activity
-- Projects: create, search, open and delete local workspaces
-- Workspace: Luau example scripts, add scripts, line numbers, tab indentation and Ctrl+S / Cmd+S local saves
-- Team: planned roles and invitation interface (not yet connected)
-- Activity: local project event history
-- Documentation: planned architecture and setup guide
-- Settings: dark/light theme and reset
-- Mobile-friendly navigation including narrow foldable screens
+- Responsive overview, projects, workspace, team, activity, docs and settings pages
+- Luau syntax coloring and line-number gutter based on the Playground editor
+- Indentation, bracket pairing, cursor position, auto-saving local drafts, Ctrl+S and search
+- Autocomplete suggestions for locals, Luau keywords and common Roblox APIs (lexical only)
+- Mobile script editor and Luau text-file export
+- Local projects saved in browser localStorage
+- **When a Cloudflare backend is configured:** GitHub OAuth login, project cloud publishing/import, revision checks, project membership and owner/editor/viewer roles
 
-**Important:** This release deliberately does not claim to have live collaboration. Project data is stored in the local browser using localStorage, not on GitHub or a server. Clearing browser storage removes local edits. Never paste API keys or secrets into the local preview.
+The frontend and backend source files are committed. **The backend is not deployed by the static website.** Until Cloudflare and GitHub OAuth are configured, sign-in and cloud features cannot work.
 
-## Publish via GitHub Pages
+## Frontend hosting — GitHub Pages
 
-This version is plain HTML, CSS, and JavaScript; no build step, Node.js, or custom domain is required.
+Enable Pages via https://github.com/SillyDev2026/Collab.io/settings/pages and select **Deploy from a branch**, branch **main**, folder **/(root)**. The site is plain HTML/CSS/JS. Hash-based routes such as #/workspace work without additional rewrite rules. GitHub Pages updates after the repository deploy succeeds.
 
-1. Open [repository settings](https://github.com/SillyDev2026/Collab.io/settings/pages).
-2. Under **Build and deployment**, select **Deploy from a branch**.
-3. Choose branch **main** and folder **/(root)**.
-4. Press **Save**.
-5. Once GitHub finishes publishing, open **https://sillydev2026.github.io/Collab.io/**.
+## Activate GitHub sign-in
 
-New changes to the root files on main will be published automatically by GitHub Pages. Publishing may take a short period after enabling the site.
+Cloud services require a Cloudflare account, D1 database, Worker and a GitHub OAuth App.
 
-If you choose **GitHub Actions** as a Pages source instead, add a workflow for static deployment first. The instructions above use branch deployment and do **not** require a custom workflow.
+Read **[backend/README.md](backend/README.md)** for the step-by-step guide. It includes:
 
-## Repo layout
+1. Create the D1 database, put its database ID into backend/wrangler.toml.
+2. Register GitHub OAuth App with callback **https://YOUR_WORKER_URL/auth/github/callback**.
+3. Apply database migrations and deploy Cloudflare Worker.
+4. Store GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET as Cloudflare secrets.
+5. Set \`window.COLLAB_CONFIG.apiBase\` in config.js to the deployed API HTTPS URL.
 
-- index.html — accessible app shell, inline SVG icons, metadata
-- styles.css — responsive design system and themes
-- app.js — hash navigation, local models, Luau workspace and interactions
-- favicon.svg — site icon
-- README.md — this guide
+You can alternatively deploy from GitHub on your **phone** using the manual [Deploy Collab.io API workflow](.github/workflows/deploy-api.yml). To use it, add these GitHub Actions repository secrets under Settings → Secrets and variables → Actions:
 
-Routes use hash URLs (e.g. #/projects or #/workspace/example). This avoids 404 errors on GitHub Pages refreshes.
+- \`CLOUDFLARE_API_TOKEN\`: a Cloudflare API token scoped for Workers deployment and D1
+- \`CLOUDFLARE_ACCOUNT_ID\`: your Cloudflare account ID
+- \`GITHUB_CLIENT_ID\`: GitHub OAuth App client ID
+- \`GITHUB_CLIENT_SECRET\`: GitHub OAuth App client secret
 
-## Planned cloud architecture (not yet deployed)
+Still create D1 and update \`wrangler.toml\` first. Then open Actions → Deploy Collab.io API → Run workflow. Do not put secrets in files or issues. Finally set \`apiBase\` in config.js.
 
-```text
-GitHub Pages (frontend)
-       |
-       | HTTPS JSON APIs + authenticated WebSocket
-       v
-Cloudflare Workers (auth, APIs, GitHub/Discord integrations)
-       |                |                 |
-       v                v                 v
-Durable Objects         D1                R2
-rooms + presence        metadata          snapshots
-       ^
-       |
-Roblox Studio plugin / optional local desktop companion
-```
+## Cloud behavior
 
-Planned milestones:
+Signing in uses GitHub OAuth with CSRF state checking and PKCE. The Worker stores session hashes in D1; the browser stores the Collab.io bearer token in sessionStorage. GitHub client secrets and GitHub access tokens are not stored in the frontend.
 
-- v0.2: Cloud API scaffold, DB migrations, project CRUD, signed sessions
-- v0.3: GitHub/Discord OAuth via backend; team roles and secure invite flows
-- v0.4: Studio plugin pairing, script capture, review/merge safeguards
-- v0.5: Real-time events, collaboration rooms, presence, conflict resolution
-- v0.6: Revision history, backups, audit logs, offline replay, rate limits
-- v1.0: Production hardening, testing, observability, mobile accessibility, docs
+- A user can explicitly publish a local project to the cloud.
+- They can create further revisions, with server-side collision detection.
+- Signed-in teammates can import a cloud project as a local workspace.
+- Owners can grant access to GitHub accounts that already signed in.
+- Editors can save updates; viewers cannot.
+- Conflicts do not silently overwrite newer remote revisions.
 
-### Security requirements for backend work
+### Limitations
 
-- Do not put Discord bot tokens, GitHub secrets, OAuth client secrets, or Cloudflare API tokens in the GitHub Pages frontend.
-- Enforce permissions on the backend for every project, script, and invite API route.
-- Never directly execute user-provided Luau on the backend.
-- Validate project IDs, request sizes, and websocket authorization; add rate limits and audit trails.
-- For Roblox Studio synchronization, capture approved changes, use stable object identifiers and revisions, perform preview/dry-run, and require explicit apply for destructive operations.
-- Protect against accidental loss with revision history, backups and concurrent modification checks.
+This release does **not** yet offer real-time collaborative cursors, WebSockets, Studio live sync, a working Discord bot, project invitation acceptance, GitHub repository write-back, or full Luau type checking/running. Lexical completions are not a Roblox Studio type checker. Local projects do not become cloud projects unless explicitly published.
 
-## Local development
+For production, add rate limiting, automatic backups, auditing, team invitation acceptance, D1 capacity limits, Cloudflare billing review, extensive integration testing and security hardening.
 
-Clone the repository and serve its root using any static server:
+## Repository structure
 
-```sh
+\`\`\`
+index.html                Browser application shell
+styles.css                Responsive theme and editor colors
+app.js                    Pages, Luau workspace, cloud client
+config.js                 Public backend URL (never contains secrets)
+editor/                   Adapted Luau Developer Playground editor components
+backend/src/index.js      Cloudflare API: OAuth, projects, members
+backend/migrations/       D1 database schema
+backend/wrangler.toml     Worker configuration
+backend/README.md         Cloud deployment and OAuth setup
+.github/workflows/        Manual API deployment
+\`\`\`
+
+## Local frontend development
+
+\`\`\`sh
 python -m http.server 8000
-```
+\`\`\`
 
-Then open http://localhost:8000.
+Open http://localhost:8000. The frontend works as a local editor without any cloud account.
 
-No dependencies are required for this frontend preview.
-
-## Status
-
-GitHub Pages publishing must be enabled in the repository's settings. The published domain is the standard GitHub Pages URL, **not** an owned `collab.io` domain.
+**Status:** v0.2 frontend committed; deployment/production activation remains a separate step.
