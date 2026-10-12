@@ -250,7 +250,8 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
       '<div class="toolbar"><div class="search-wrap">' + icon("search") + '<input id="project-search" type="search" placeholder="Search projects" aria-label="Search projects"></div>' +
       badge(state.projects.length + " projects") + '</div><div class="project-grid" id="project-grid">' + cards +
       '</div><div id="project-no-match" class="empty" style="display:none">No projects match your search.</div>' +
-      (state.projects.length ? "" : emptyProjects());
+      (state.projects.length ? "" : emptyProjects()) + (signedIn() ? '<div class="section-head mt-24"><h2>Cloud projects</h2><button class="btn small" data-refresh-cloud="1">Refresh</button></div><div class="card panel"><div class="project-list">' +
+      (cloudProjects.length ? cloudProjects.map(function (p) { return '<div class="cloud-project-row">' + projectIcon(p) + '<div><strong>' + esc(p.name) + '</strong><p>Revision ' + p.revision + ' · ' + esc(p.role) + '</p></div><button class="btn small" data-import-cloud="' + esc(p.id) + '">Import</button></div>'; }).join('') : '<p>No cloud projects yet. Publish one from its workspace.</p>') + '</div></div>' : '');
   }
   function workspacePage(id) {
     var p = getProject(id) || state.projects[0];
@@ -266,7 +267,8 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
     return pageHead("Workspace", "Edit local Luau drafts and organize scripts. Studio connectivity is coming later.", '<a href="#/projects" class="btn ghost">' + icon("layers") + ' All projects</a>') +
       '<div class="card workspace-header">' + projectIcon(p) + '<div><h2>' + esc(p.name) + '</h2><p>' + esc(p.description || "No description") +
       '</p></div><span class="push">' + (p.sample ? badge("Sample project") : badge("Local project", "purple")) + '</span></div>' +
-      '<div class="notice">' + icon("shield") + '<div><strong>Local editing only</strong><p>Changes are saved in this browser. This is not connected to Roblox Studio, other developers, or any cloud database.</p></div></div>' +
+      '<div class="notice">' + icon("shield") + '<div><strong>Drafts autosave locally</strong><p>Cloud updates require an explicit sync. Live Roblox Studio synchronization is not connected.</p></div></div>' +
+      (signedIn() ? '<div class="cloud-actions"><button class="btn primary small" data-sync-cloud="' + esc(p.id) + '">' + icon("save", "tiny") + ' ' + (p.cloud_id ? 'Update cloud revision' : 'Publish to cloud') + '</button> ' + (p.cloud_revision ? badge('Revision ' + p.cloud_revision, 'green') : '') + '</div>' : '') +
       '<div class="workspace-layout"><aside class="card explorer"><h3>Explorer</h3>' + files +
       '<button class="script-item" data-new-script="' + esc(p.id) + '">' + icon("plus", "tiny") + ' New script</button></aside>' +
       '<section class="card editor"><div class="editor-top"><div class="flex">' + icon("code") + '<strong>' + esc(script ? script.name : "No scripts") +
@@ -345,10 +347,10 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
       }).join("") + '</nav><div class="nav-label" style="margin-top:27px">Resources</div><nav aria-label="Resources">' +
       navs.slice(5).map(function (n) { return navLink(n[0], n[1], n[2], current.page === n[0]); }).join("") +
       '</nav><div class="sidebar-bottom"><div class="side-info"><div class="flex"><span class="small-dot"></span><strong>Preview is ready</strong></div><p>Explore the interface. Cloud and Studio sync are not connected.</p></div>' +
-      '<div class="side-foot">Collab.io v0.1 · Local preview</div></div></aside><main class="main"><header class="topbar">' +
+      '<div class="side-foot">Collab.io v0.2 · ' + (signedIn() ? 'Cloud account' : 'Local preview') + '</div></div></aside><main class="main"><header class="topbar">' +
       '<div class="flex"><button class="icon-btn mobile-menu" data-menu="1" aria-label="Open navigation">' + icon("menu") +
       '</button><div class="crumbs"><span>Workspace</span>' + icon("chevron", "tiny") + '<strong>' + titles[current.page] + '</strong></div></div>' +
-      '<div class="top-actions">' + badge("LOCAL PREVIEW", "purple") + '<button class="btn primary small" data-new-project="1">' + icon("plus", "tiny") +
+      '<div class="top-actions">' + (signedIn() ? '<span class="badge green">@' + esc(authUser.login) + '</span><button class="btn small" data-signout="1">Sign out</button>' : '<button class="btn small" data-signin="1">' + icon("git", "tiny") + ' Sign in</button>') + '<button class="btn primary small" data-new-project="1">' + icon("plus", "tiny") +
       '<span class="mobile-only">New</span><span class="desktop-only">New project</span></button></div></header><div class="page">' + body +
       '</div></main></div>' + renderModal();
     var select = document.getElementById("theme-select");
@@ -531,7 +533,12 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
     } catch (_) { notice("Copy is unavailable in this browser."); }
   }
   document.addEventListener("click", function (event) {
-    var el = event.target.closest("[data-menu],[data-close-nav],[data-new-project],[data-open],[data-script],[data-save-script],[data-new-script],[data-delete-project],[data-close-modal],[data-reset],[data-copy],[data-complete],[data-find-next],[data-indent],[data-export-script]");
+    var el = event.target.closest("[data-menu],[data-close-nav],[data-new-project],[data-open],[data-script],[data-save-script],[data-new-script],[data-delete-project],[data-close-modal],[data-reset],[data-copy],[data-complete],[data-find-next],[data-indent],[data-export-script],[data-signin],[data-signout],[data-sync-cloud],[data-import-cloud],[data-refresh-cloud]");
+    if (el && el.hasAttribute("data-signin")) { startSignIn(); return; }
+    if (el && el.hasAttribute("data-signout")) { signOut(); return; }
+    if (el && el.hasAttribute("data-sync-cloud")) { syncCloud(el.dataset.syncCloud); return; }
+    if (el && el.hasAttribute("data-import-cloud")) { importCloud(el.dataset.importCloud); return; }
+    if (el && el.hasAttribute("data-refresh-cloud")) { refreshCloud().then(render); return; }
     if (el && el.hasAttribute("data-complete")) { selectCompletion(Number(el.dataset.complete)); return; }
     if (el && el.hasAttribute("data-find-next")) { findNext(); return; }
     if (el && el.hasAttribute("data-export-script")) { exportScript(); return; }
@@ -608,4 +615,5 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
   window.addEventListener("hashchange", function () { sidebarOpen = false; modal = ""; selectedScript = ""; render(); window.scrollTo(0, 0); });
   updateTheme(getTheme());
   render();
+  initAuth();
 })();
