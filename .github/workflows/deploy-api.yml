@@ -1,0 +1,35 @@
+name: Deploy BuildStudio API
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+      GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate credentials and database
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$GITHUB_CLIENT_ID"
+          test -n "$GITHUB_CLIENT_SECRET"
+          ! grep -q 'REPLACE_WITH_NEW_BUILDSTUDIO_D1_ID' worker/wrangler.jsonc
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Apply D1 migrations
+        run: npx wrangler d1 migrations apply buildstudio-io --remote --config worker/wrangler.jsonc
+      - name: Deploy Worker
+        run: npx wrangler deploy --config worker/wrangler.jsonc
+      - name: Store OAuth ID
+        run: printf '%s' "$GITHUB_CLIENT_ID" | npx wrangler secret put GITHUB_CLIENT_ID --config worker/wrangler.jsonc
+      - name: Store OAuth secret
+        run: printf '%s' "$GITHUB_CLIENT_SECRET" | npx wrangler secret put GITHUB_CLIENT_SECRET --config worker/wrangler.jsonc

@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "buildstudio-io-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "vars": {
+    "FRONTEND_ORIGIN": "https://sillydev2026.github.io",
+    "FRONTEND_URL": "https://sillydev2026.github.io/BuildStudio.io/"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "buildstudio-io",
+      "database_id": "REPLACE_WITH_NEW_BUILDSTUDIO_D1_ID",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
