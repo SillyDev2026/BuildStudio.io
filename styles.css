@@ -39,3 +39,16 @@ body[data-theme="light"] .completion-item.selected,body[data-theme="light"] .com
 body[data-theme="light"] .completion-item small{color:#667d9d}
 @media(max-width:800px){.code-surface,.code-surface .code-input{min-height:290px;height:290px}.editor-body .line-numbers{height:290px;max-height:290px}.editor-tools{padding:10px}.find-label{max-width:none;width:100%;flex-basis:100%}.editor-tools .btn{font-size:11px}}
 @media(max-width:520px){.code-surface,.code-surface .code-input{min-height:260px;height:260px}.editor-body .line-numbers{height:260px;max-height:260px}.syntax-text,.code-surface .code-input{font-size:12px}}
+
+
+.cloud-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-bottom:17px}
+.cloud-project-row{display:flex;align-items:center;gap:13px;padding:12px 0;border-bottom:1px solid var(--line)}
+.cloud-project-row:last-child{border-bottom:0}
+.cloud-project-row>div{flex:1;min-width:0}
+.cloud-project-row strong{font-size:13px}
+.cloud-project-row p{font-size:11px;margin:3px 0 0}
+.cloud-project-row .btn{flex-shrink:0}
+#member-output{margin-top:15px}
+#member-output .member-row{padding:10px 0}
+.editor-body .code-input{resize:none}
+@media(max-width:700px){.topbar .crumbs{display:none}.topbar .top-actions{gap:6px}.topbar .top-actions .btn{padding:8px 9px;font-size:11px}.cloud-project-row{flex-wrap:wrap}.cloud-project-row .btn{margin-left:auto}.topbar .top-actions .badge{display:none}}
