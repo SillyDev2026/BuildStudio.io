@@ -1,3 +1,6 @@
+import { CodeEditor } from './editor/v1-editor.js';
+import { completeLuau } from './editor/completions.js';
+import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-geometry.js';
 /* Collab.io — GitHub Pages front end.
  * Local Preview: data stays in this browser only. No cloud sync or login is claimed.
  */
@@ -8,6 +11,10 @@
   var THEME = "collab-io-theme";
   var ROOT = document.getElementById("app");
   var toastTimer = null;
+  var activeEditor = null;
+  var activeScript = null;
+  var activeCompletion = null;
+  var completionIndex = 0;
   var modal = "";
   var selectedScript = "";
   var sidebarOpen = false;
@@ -169,10 +176,12 @@
       '<section class="card editor"><div class="editor-top"><div class="flex">' + icon("code") + '<strong>' + esc(script ? script.name : "No scripts") +
       '</strong></div><div class="flex">' + badge("Luau", "purple") + '<button class="btn small primary" data-save-script="' + esc(p.id) + '"' + (!script ? " disabled" : "") +
       '>' + icon("save", "tiny") + ' Save locally</button></div></div>' +
+      '<div class="editor-tools"><label class="find-label">Find <input id="editor-find" type="search" placeholder="Search in script" aria-label="Find in script"></label><button class="btn small" data-find-next="1">Next</button><button class="btn small" data-indent="1">' + icon("code", "tiny") + ' Tab</button><button class="btn small" data-export-script="1">Export .luau</button></div>' +
       '<div class="editor-body"><div class="line-numbers" id="line-numbers">' + Array.from({ length: count }, function (_, i) { return i + 1; }).join("\n") +
-      '</div><textarea id="source-editor" class="code-input" aria-label="Luau code editor" spellcheck="false" wrap="off"' + (!script ? " disabled" : "") +
-      '>' + esc(script ? script.source : "-- Create a script to begin") + '</textarea></div>' +
-      '<div class="editor-bottom"><span id="editor-count">' + count + ' lines · Local draft</span><span>Not synced to Studio</span></div></section></div>' +
+      '</div><div class="code-surface"><div class="syntax-scroll"><pre id="source-highlight" class="syntax-text" aria-hidden="true"></pre></div>' +
+      '<textarea id="source-editor" class="code-input" aria-label="Luau code editor" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" wrap="off"' + (!script ? " disabled" : "") +
+      '>' + esc(script ? script.source : "-- Create a script to begin") + '</textarea><div id="completion-popup" class="completion-popup" role="listbox" hidden></div></div></div>' +
+      '<div class="editor-bottom"><span id="editor-count">' + count + ' lines · Ln 1, Col 1 · Saved locally</span><span>Not synced to Studio</span></div></section></div>' +
       '<div class="flex mt-24"><button class="btn danger small" data-delete-project="' + esc(p.id) + '">' + icon("trash", "tiny") + ' Delete project</button></div>';
   }
   function teamPage() {
@@ -250,23 +259,131 @@
     if (select) select.value = getTheme();
     var nameInput = document.getElementById("item-name");
     if (nameInput) nameInput.focus();
-    var editor = document.getElementById("source-editor");
-    if (editor) { editor.addEventListener("input", updateLines); editor.addEventListener("scroll", syncLines); }
+    initializeEditor();
   }
-  function syncLines() {
-    var editor = document.getElementById("source-editor");
-    var numbers = document.getElementById("line-numbers");
-    if (editor && numbers) numbers.scrollTop = editor.scrollTop;
+  function hideCompletions() {
+    activeCompletion = null;
+    var popup = document.getElementById("completion-popup");
+    if (popup) { popup.hidden = true; popup.replaceChildren(); }
   }
-  function updateLines() {
-    var editor = document.getElementById("source-editor");
-    var numbers = document.getElementById("line-numbers");
-    var countLabel = document.getElementById("editor-count");
-    if (!editor || !numbers) return;
-    var count = editor.value.split("\n").length;
-    numbers.textContent = Array.from({ length: count }, function (_, index) { return index + 1; }).join("\n");
-    if (countLabel) countLabel.textContent = count + " lines · Unsaved local draft";
-    syncLines();
+  function updateStatus() {
+    var input = document.getElementById("source-editor");
+    var label = document.getElementById("editor-count");
+    if (!label || !input || !activeEditor) return;
+    var pos = activeEditor.position;
+    label.textContent = input.value.split("\n").length + " lines · Ln " + pos.line + ", Col " + pos.column + " · Autosaved locally";
+  }
+  function showCompletions() {
+    var input = document.getElementById("source-editor");
+    var popup = document.getElementById("completion-popup");
+    if (!input || !popup || !activeEditor || document.activeElement !== input) { hideCompletions(); return; }
+    var result = completeLuau(input.value, input.selectionStart);
+    if (!result) { hideCompletions(); return; }
+    activeCompletion = result;
+    completionIndex = 0;
+    popup.innerHTML = result.items.map(function (item, i) {
+      return '<button type="button" role="option" aria-selected="' + (i === 0) + '" class="completion-item ' + (i === 0 ? "selected" : "") +
+        '" data-complete="' + i + '"><span>' + esc(item.label) + '</span><small>' + esc(item.kind) + '</small></button>';
+    }).join("");
+    popup.hidden = false;
+    try {
+      var caret = textareaCaretOffset(input);
+      var bounds = { width: input.clientWidth, height: input.clientHeight };
+      var placement = placeCompletionPopup(caret, bounds, { width: 300, height: 245 });
+      popup.style.left = Math.round(placement.left) + "px";
+      popup.style.top = Math.round(placement.top) + "px";
+      popup.style.width = Math.round(placement.width) + "px";
+      popup.style.maxHeight = Math.max(90, Math.round(placement.height)) + "px";
+    } catch (error) { popup.style.left = "10px"; popup.style.top = "80px"; }
+  }
+  function selectCompletion(index) {
+    if (!activeEditor || !activeCompletion) return;
+    var item = activeCompletion.items[index];
+    if (!item) return;
+    var range = activeCompletion;
+    hideCompletions();
+    activeEditor.replace(range.from, range.to, item.label);
+  }
+  function initializeEditor() {
+    activeEditor = null;
+    activeScript = null;
+    activeCompletion = null;
+    var input = document.getElementById("source-editor");
+    if (!input || input.disabled) return;
+    var current = route();
+    var project = getProject(current.id);
+    var script = project && project.scripts.find(function (file) { return file.id === selectedScript; });
+    if (!script) return;
+    activeScript = script;
+    activeEditor = new CodeEditor({
+      input: input,
+      highlight: document.getElementById("source-highlight"),
+      gutter: document.getElementById("line-numbers"),
+      onChange: function (value) {
+        script.source = value;
+        project.updated = Date.now();
+        save();
+        updateStatus();
+        showCompletions();
+      },
+      onCursor: function () { updateStatus(); },
+      onShortcut: function (key) {
+        if (key === "s") { var btn = document.querySelector("[data-save-script]"); if (btn) btn.click(); }
+        else if (key === "f") { document.getElementById("editor-find").focus(); }
+        else if (key === "Enter") notice("Code execution requires a trusted Luau runtime.");
+        else if (key === "p") notice("Open a script from the Explorer.");
+      }
+    });
+    activeEditor.load(script.source, script.id);
+    input.addEventListener("keyup", function () { if (document.activeElement === input) showCompletions(); });
+    input.addEventListener("click", hideCompletions);
+    input.addEventListener("keydown", function (event) {
+      if (!activeCompletion) return;
+      var popup = document.getElementById("completion-popup");
+      if (!popup || popup.hidden) return;
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        completionIndex = (completionIndex + (event.key === "ArrowDown" ? 1 : -1) + activeCompletion.items.length) % activeCompletion.items.length;
+        popup.querySelectorAll("[data-complete]").forEach(function (item, index) {
+          item.classList.toggle("selected", index === completionIndex);
+          item.setAttribute("aria-selected", index === completionIndex ? "true" : "false");
+        });
+      } else if (event.key === "Tab" || event.key === "Enter") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        selectCompletion(completionIndex);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        hideCompletions();
+      }
+    }, true);
+    updateStatus();
+  }
+  function findNext() {
+    var input = document.getElementById("source-editor");
+    var query = document.getElementById("editor-find");
+    if (!input || !query || !query.value) { if (query) query.focus(); return; }
+    var start = input.selectionEnd;
+    var found = input.value.toLowerCase().indexOf(query.value.toLowerCase(), start);
+    if (found < 0) found = input.value.toLowerCase().indexOf(query.value.toLowerCase());
+    if (found < 0) { notice("No matches found."); return; }
+    input.focus();
+    input.setSelectionRange(found, found + query.value.length);
+    var prefixLines = input.value.slice(0, found).split("\n").length;
+    input.scrollTop = Math.max(0, (prefixLines - 3) * 22);
+    updateStatus();
+  }
+  function exportScript() {
+    if (!activeScript) return;
+    var file = new Blob([activeScript.source], { type: "text/plain;charset=utf-8" });
+    var url = URL.createObjectURL(file);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = activeScript.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
   function getTheme() {
     try { return localStorage.getItem(THEME) === "light" ? "light" : "dark"; }
@@ -318,7 +435,11 @@
     } catch (_) { notice("Copy is unavailable in this browser."); }
   }
   document.addEventListener("click", function (event) {
-    var el = event.target.closest("[data-menu],[data-close-nav],[data-new-project],[data-open],[data-script],[data-save-script],[data-new-script],[data-delete-project],[data-close-modal],[data-reset],[data-copy]");
+    var el = event.target.closest("[data-menu],[data-close-nav],[data-new-project],[data-open],[data-script],[data-save-script],[data-new-script],[data-delete-project],[data-close-modal],[data-reset],[data-copy],[data-complete],[data-find-next],[data-indent],[data-export-script]");
+    if (el && el.hasAttribute("data-complete")) { selectCompletion(Number(el.dataset.complete)); return; }
+    if (el && el.hasAttribute("data-find-next")) { findNext(); return; }
+    if (el && el.hasAttribute("data-export-script")) { exportScript(); return; }
+    if (el && el.hasAttribute("data-indent")) { if (activeEditor) activeEditor.replace(activeEditor.input.selectionStart, activeEditor.input.selectionEnd, "    "); return; }
     if (!el) {
       if (event.target.matches("[data-modal-backdrop]")) closeModal();
       return;
@@ -387,19 +508,6 @@
   });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && modal) closeModal();
-    var editor = document.getElementById("source-editor");
-    if (editor && event.target === editor && event.key === "Tab") {
-      event.preventDefault();
-      var start = editor.selectionStart;
-      var end = editor.selectionEnd;
-      editor.setRangeText("    ", start, end, "end");
-      updateLines();
-    }
-    if (editor && event.target === editor && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      var button = document.querySelector("[data-save-script]");
-      if (button) button.click();
-    }
   });
   window.addEventListener("hashchange", function () { sidebarOpen = false; modal = ""; selectedScript = ""; render(); window.scrollTo(0, 0); });
   updateTheme(getTheme());
