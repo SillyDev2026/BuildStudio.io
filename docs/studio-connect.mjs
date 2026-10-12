@@ -60,9 +60,10 @@ async function publish(force=false){
       const remote=await request("/v1/state");
       revision=remote.revision;
     }
-    const value=await request("/v1/state",{method:"PUT",body:JSON.stringify({revision,project:currentProject()})});
-    revision=value.revision;dirty=false;conflict=false;
-    setBadge("● Studio synced",true);
+    const submission=JSON.stringify(currentProject());
+    const value=await request("/v1/state",{method:"PUT",body:JSON.stringify({revision,project:JSON.parse(submission)})});
+    revision=value.revision;dirty=JSON.stringify(currentProject())!==submission;conflict=false;
+    setBadge(dirty?"● Sync queued":"● Studio synced",true);
   }catch(e){
     if(e.status===409){conflict=true;lastRemote=e.details;setBadge("⚠ Sync conflict",true);toast("Studio conflict: open Studio Connect to choose a copy");}
     else{connected=false;setBadge("Studio offline");}
