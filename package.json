@@ -1,10 +1,10 @@
 {
   "name": "buildstudio-io",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check docs/app.js && node --check docs/model.mjs && node --check worker/src/index.js",
+    "check": "node --check docs/app.js && node --check docs/model.mjs && node --check docs/store.mjs && node --check docs/canvas.mjs && node --check docs/cloud.mjs && node --check worker/src/index.js",
     "test": "node --test tests/*.test.mjs",
     "deploy:api": "wrangler deploy --config worker/wrangler.jsonc",
     "db:migrate": "wrangler d1 migrations apply buildstudio-io --remote --config worker/wrangler.jsonc"

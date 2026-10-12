@@ -1,47 +1,89 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0c121c"><meta name="description" content="BuildStudio.io visual Roblox UI designer">
-<title>BuildStudio.io | Visual Roblox UI Builder</title><link rel="icon" href="./favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="./styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0d1320">
+  <meta name="description" content="BuildStudio.io — design Roblox UI visually, export Luau, and sync projects.">
+  <title>BuildStudio.io — Roblox UI Designer</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-<header class="top">
- <a class="brand" href="./"><span class="logo">▣</span> Build<span>Studio</span><small>.io</small></a>
- <button id="projects" class="project">Starter HUD ▾</button><span id="save" class="muted">Ready</span>
- <span class="grow"></span>
- <button id="undo" title="Undo">↶</button><button id="redo" title="Redo">↷</button>
- <button id="preview">Preview</button><button id="code">Luau</button><button id="export" class="primary">Export</button>
- <button id="account" title="Cloud projects">GitHub</button>
-</header>
-<section class="shell">
-<aside id="left" class="pane left">
- <nav class="tabs"><button id="components-tab" class="active">Components</button><button id="layers-tab">Layers</button></nav>
- <div id="components-panel">
-  <p class="eyebrow">INSERT COMPONENTS</p><div id="components"></div>
-  <p class="eyebrow">STARTER TEMPLATES</p><div id="templates"></div>
-  <p class="hint">Select a frame to add a child. Drag elements directly on the canvas to move; drag the lower-right handle to resize.</p>
- </div>
- <div id="layers-panel" hidden><p class="eyebrow">SCREEN GUI / HIERARCHY</p><div id="layers"></div></div>
-</aside>
-<main class="main">
- <div class="toolbar"><button id="mobile-add">+ Elements</button><span class="grow"></span>
-  <button data-device="16/9" class="active">Desktop</button><button data-device="4/3">Tablet</button><button data-device="9/16">Mobile</button><button id="snap" title="Snap moves and resizes to a 2.5% grid" aria-pressed="false">Snap: Off</button>
- </div>
- <div class="workspace"><div class="board-wrap"><div class="board-head"><span class="live">●</span> <span id="board-name">Starter HUD</span><small>ScreenGui · UDim2.fromScale</small></div>
- <div id="board" class="board"><div class="grid"></div><div id="elements"></div><div class="watermark">BUILDSTUDIO / PREVIEW</div></div>
- <div class="board-foot">Roblox UI Designer <span id="object-count">0 components</span></div></div></div>
- <footer class="status"><span id="status">Ready to design</span><span id="selection-label">Nothing selected</span></footer>
-</main>
-<aside id="right" class="pane right">
- <div class="heading"><span>PROPERTIES</span><button id="mobile-properties">Close</button></div>
- <div id="inspector"><p class="hint">Select a component to edit its appearance, size and position.</p></div>
-</aside>
-</section>
-<div class="mobilebar"><button id="show-components">Components</button><button id="show-layers">Layers</button><button id="show-properties">Properties</button><button id="show-canvas">Canvas</button></div>
+<div class="app">
+  <header class="topbar">
+    <a href="./" class="brand" aria-label="BuildStudio home"><span class="brand-icon">▣</span><span>Build<span class="mint">Studio</span><small>.io</small></span></a>
+    <button id="projects" class="project-switch" title="Switch or manage projects">Starter HUD <span class="chevron">⌄</span></button>
+    <span id="save" class="save-state" aria-live="polite">Local autosave</span>
+    <span class="spacer"></span>
+    <button id="undo" class="icon-btn" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+    <button id="redo" class="icon-btn" title="Redo (Ctrl+Y)" aria-label="Redo">↷</button>
+    <button id="preview" class="action-btn">◉ Preview</button>
+    <button id="code" class="action-btn">⌘ Luau</button>
+    <button id="export" class="action-btn primary">↧ Export</button>
+    <button id="account" class="account-btn">GitHub</button>
+  </header>
+  <div class="layout">
+    <aside class="sidebar left" id="left" aria-label="UI components and layers">
+      <div class="side-tabs">
+        <button class="active" id="components-tab">Components</button>
+        <button id="layers-tab">Hierarchy</button>
+      </div>
+      <div class="sidebar-content" id="components-panel">
+        <label class="search"><span>⌕</span><input type="search" id="component-search" placeholder="Find a component..." autocomplete="off"></label>
+        <p class="section-label">ROBLOX UI ELEMENTS</p><div id="components" class="component-list"></div>
+        <p class="section-label">TEMPLATE LIBRARY</p><div id="templates" class="template-list"></div>
+        <p class="aside-tip">Select a Frame before inserting to nest it. Drag to move and pull the corner to resize.</p>
+      </div>
+      <div class="sidebar-content" id="layers-panel" hidden>
+        <label class="search"><span>⌕</span><input type="search" id="layer-search" placeholder="Search objects..." autocomplete="off"></label>
+        <p class="section-label">SCREEN GUI <span id="layer-count"></span></p>
+        <div id="layers" class="layer-list"></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="toolbar" aria-label="Canvas tools">
+        <button id="mobile-add" class="mobile-only">+ Add</button>
+        <span class="toolbar-title">DEVICE</span>
+        <div id="devices" class="segmented">
+          <button data-device="desktop" class="active">Desktop</button>
+          <button data-device="tablet">Tablet</button>
+          <button data-device="mobile">Phone</button>
+        </div>
+        <span class="toolbar-divider"></span>
+        <button id="snap" aria-pressed="false">♯ Snap off</button>
+        <button id="grid" aria-pressed="true">⊞ Grid</button>
+        <span class="spacer"></span>
+        <button id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button><span id="zoom-label">100%</span>
+        <button id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="audit" title="Analyze the design">◇ Inspect</button>
+      </div>
+      <div class="workspace" id="workspace">
+        <div class="canvas-shell" id="board-wrap">
+          <div class="canvas-top"><div><span class="dot"></span> <strong id="board-name">Starter HUD</strong></div><small id="device-label">Desktop · 16:9</small></div>
+          <div class="board" id="board" role="application" aria-label="Roblox UI design canvas">
+            <div class="grid" id="canvas-grid"></div>
+            <div id="elements"></div>
+            <div class="board-watermark">BUILDSTUDIO V1</div>
+          </div>
+          <div class="canvas-foot"><span>ScreenGui · UDim2.fromScale</span><span id="object-count">0 elements</span></div>
+        </div>
+      </div>
+      <footer class="statusbar"><span id="status">Ready to design</span><span id="selection-label">No selection</span><button id="help" title="Keyboard shortcuts">? Shortcuts</button></footer>
+    </main>
+    <aside class="sidebar right" id="right" aria-label="Inspector">
+      <div class="inspector-heading"><div><span class="section-label">INSPECTOR</span><strong id="inspector-title">Properties</strong></div><button id="mobile-properties" class="mobile-only">✕</button></div>
+      <div id="inspector" class="inspector-body"><p class="aside-tip">Select an object to edit it.</p></div>
+    </aside>
+  </div>
+  <nav class="mobilebar" aria-label="Editor navigation">
+    <button id="show-components">＋ Elements</button><button id="show-layers">☷ Layers</button><button id="show-canvas">▣ Canvas</button><button id="show-properties">⚙ Properties</button>
+  </nav>
+</div>
 <div id="toast" role="status" aria-live="polite"></div>
-<dialog id="modal"><div class="modal-head"><h2 id="modal-title">BuildStudio</h2><button id="close-modal" title="Close">✕</button></div><div id="modal-body"></div></dialog>
+<dialog id="modal" aria-labelledby="modal-title"><div class="modal-head"><h2 id="modal-title">BuildStudio</h2><button id="close-modal" aria-label="Close">✕</button></div><div id="modal-body"></div></dialog>
 <input type="file" accept=".json,application/json" id="file-import" hidden>
-<script src="./config.js"></script><script type="module" src="./app.js"></script>
+<script src="./config.js"></script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>
