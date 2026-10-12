@@ -272,3 +272,4 @@ document.addEventListener("keydown",keyboard);
 window.addEventListener("pagehide",()=>store.persist());
 renderComponents();render();setDevice("desktop");
 executeAsync(async()=>{const person=await cloud.initialize();if(person)toast("Signed in as "+person.login);});
+export {store,toast};
