@@ -16,6 +16,102 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
   var activeCompletion = null;
   var completionIndex = 0;
   var modal = "";
+  var authToken = "";
+  var authUser = null;
+  var cloudProjects = [];
+  function apiBase() {
+    try {
+      var raw = String(window.COLLAB_CONFIG?.apiBase || "");
+      var url = new URL(raw);
+      if (url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost")) return url.origin;
+    } catch (_) {}
+    return "";
+  }
+  function signedIn() { return !!authToken && !!authUser; }
+  async function callAPI(path, method, body) {
+    if (!apiBase()) throw Error("Backend not configured");
+    var headers = { Accept: "application/json" };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (authToken) headers.Authorization = "Bearer " + authToken;
+    var response = await fetch(apiBase() + path, { method: method || "GET", headers, body: body === undefined ? undefined : JSON.stringify(body), cache: "no-store" });
+    var result = await response.json().catch(function () { return {}; });
+    if (!response.ok) throw Error(result.error || "HTTP " + response.status);
+    return result;
+  }
+  async function refreshCloud() {
+    if (!signedIn()) return;
+    try { cloudProjects = (await callAPI("/api/projects")).projects || []; }
+    catch (error) { notice("Cloud: " + error.message); }
+  }
+  async function initAuth() {
+    var ticket = /\bauth_ticket=([A-Za-z0-9_-]{43})\b/.exec(location.hash)?.[1];
+    if (ticket) {
+      history.replaceState(null, "", location.pathname + location.search + "#/overview");
+      try {
+        var result = await callAPI("/auth/exchange", "POST", { ticket });
+        authToken = result.token;
+        authUser = result.user;
+        sessionStorage.setItem("collab_access", authToken);
+        notice("Signed in as @" + authUser.login);
+      } catch (error) { notice("Sign-in failed: " + error.message); }
+    } else {
+      try { authToken = sessionStorage.getItem("collab_access") || ""; } catch (_) {}
+      if (authToken && apiBase()) {
+        try { authUser = (await callAPI("/auth/me")).user; }
+        catch (_) { authToken = ""; try { sessionStorage.removeItem("collab_access"); } catch (_) {} }
+      }
+    }
+    if (signedIn()) await refreshCloud();
+    render();
+  }
+  function startSignIn() {
+    if (!apiBase()) { location.hash = "#/settings"; notice("Configure and deploy the Cloudflare backend first."); return; }
+    location.assign(apiBase() + "/auth/github/start");
+  }
+  async function signOut() {
+    try { if (authToken) await callAPI("/auth/logout", "POST"); } catch (_) {}
+    authToken = "";
+    authUser = null;
+    cloudProjects = [];
+    try { sessionStorage.removeItem("collab_access"); } catch (_) {}
+    render(); notice("Signed out");
+  }
+  async function syncCloud(projectId) {
+    var project = getProject(projectId);
+    if (!project || !signedIn()) return;
+    if (!confirm("Upload this project's Luau scripts to Collab.io cloud storage?")) return;
+    var scripts = project.scripts.map(function (f) { return { name: f.name, source: f.source }; });
+    try {
+      if (project.cloud_id) {
+        var updated = await callAPI("/api/projects/" + encodeURIComponent(project.cloud_id), "PUT", {
+          name: project.name, description: project.description, scripts, expected_revision: project.cloud_revision
+        });
+        project.cloud_revision = updated.revision;
+      } else {
+        var created = await callAPI("/api/projects", "POST", { name: project.name, description: project.description, scripts });
+        project.cloud_id = created.project.id;
+        project.cloud_revision = created.project.revision;
+      }
+      save(); activity("Cloud revision saved", project.name);
+      await refreshCloud(); render();
+      notice("Synced cloud revision " + project.cloud_revision);
+    } catch (error) {
+      notice(error.message === "revision_conflict" ? "Revision conflict — cloud copy was not overwritten." : "Cloud save: " + error.message);
+    }
+  }
+  async function importCloud(id) {
+    try {
+      var result = await callAPI("/api/projects/" + encodeURIComponent(id));
+      var remote = result.project;
+      var project = { id: makeId(), name: remote.name, description: remote.description, updated: Date.now(),
+        cloud_id: remote.id, cloud_revision: remote.revision, sample: false,
+        scripts: remote.scripts.map(function (f) { return { id: makeId(), name: f.name, source: f.source }; }) };
+      state.projects.unshift(project); activity("Imported cloud revision", project.name);
+      selectedScript = ""; location.hash = "#/workspace/" + project.id;
+      render(); notice("Cloud project imported locally");
+    } catch (error) { notice("Cloud import: " + error.message); }
+  }
+
   var selectedScript = "";
   var sidebarOpen = false;
   var gradients = [
