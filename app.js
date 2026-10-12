@@ -35,7 +35,14 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
     if (authToken) headers.Authorization = "Bearer " + authToken;
     var response = await fetch(apiBase() + path, { method: method || "GET", headers, body: body === undefined ? undefined : JSON.stringify(body), cache: "no-store" });
     var result = await response.json().catch(function () { return {}; });
-    if (!response.ok) throw Error(result.error || "HTTP " + response.status);
+    if (!response.ok) {
+      if (response.status === 401 && path !== "/auth/exchange") {
+        authToken = ""; authUser = null; cloudProjects = [];
+        try { sessionStorage.removeItem("collab_access"); } catch (_) {}
+        queueMicrotask(render);
+      }
+      throw Error(result.error || "HTTP " + response.status);
+    }
     return result;
   }
   async function refreshCloud() {
@@ -347,6 +354,8 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
       icon("plus") + (newScript ? " Add script" : " Create project") + "</button></div></form></div></div>";
   }
   function render() {
+    if (activeEditor && activeEditor.resizeObserver) activeEditor.resizeObserver.disconnect();
+    if (activeEditor && activeEditor.raf) cancelAnimationFrame(activeEditor.raf);
     var current = route();
     var titles = { overview: "Overview", projects: "Projects", workspace: "Workspace", team: "Team", activity: "Activity", docs: "Documentation", settings: "Settings" };
     var body = { overview: overview, projects: projectsPage, workspace: function () { return workspacePage(current.id); }, team: teamPage, activity: activityPage, docs: docsPage, settings: settingsPage }[current.page]();
@@ -443,7 +452,7 @@ import { textareaCaretOffset, placeCompletionPopup } from './editor/completion-g
       onShortcut: function (key) {
         if (key === "s") { var btn = document.querySelector("[data-save-script]"); if (btn) btn.click(); }
         else if (key === "f") { document.getElementById("editor-find").focus(); }
-        else if (key === "Enter") notice("Code execution requires a trusted Luau runtime.");
+        else if (key === "enter") notice("Code execution requires a trusted Luau runtime.");
         else if (key === "p") notice("Open a script from the Explorer.");
       }
     });
